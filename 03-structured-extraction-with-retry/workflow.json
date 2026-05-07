@@ -1,0 +1,357 @@
+{
+  "name": "03-structured-extraction-with-retry",
+  "active": true,
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "extract",
+        "responseMode": "lastNode",
+        "authentication": "none"
+      },
+      "id": "webhook-trigger",
+      "name": "Webhook In",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [
+        100,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "text": "Extract structured data from unstructured text"
+      },
+      "id": "extraction-note",
+      "name": "Extraction Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        100,
+        250
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "text",
+              "name": "text",
+              "type": "string",
+              "value": "={{ $json.text }}"
+            },
+            {
+              "id": "retry_count",
+              "name": "retry_count",
+              "type": "number",
+              "value": 0
+            },
+            {
+              "id": "last_error",
+              "name": "last_error",
+              "type": "string",
+              "value": ""
+            }
+          ]
+        }
+      },
+      "id": "init-state",
+      "name": "Initialize State",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3,
+      "position": [
+        300,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "model": "gpt-4o-mini",
+        "temperature": 0,
+        "messages": {
+          "messageValues": [
+            {
+              "content": "Extract structured data from this text into JSON format.\n\nRequired schema:\n{\"name\": string, \"email\": string, \"phone\": string, \"address\": string}\n\nText: {{ $json.text }}\n\n{{ $json.last_error ? 'Previous error: ' + $json.last_error + '. Please ensure output is valid JSON matching the schema.' : '' }}\n\nRespond ONLY with valid JSON matching the schema above.",
+              "role": "user"
+            }
+          ]
+        }
+      },
+      "id": "extract-function",
+      "name": "Extract via Function Calling",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [
+        500,
+        100
+      ],
+      "credentials": {
+        "openAiApi": "={{ $credentials.openAiApi }}"
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "try {\n  const json = JSON.parse(item.json.choices[0].message.content);\n  if (!json.name || !json.email) {\n    throw new Error('Missing required fields: name or email');\n  }\n  return [{json}];\n} catch (error) {\n  return {error: error.message};\n}"
+      },
+      "id": "parse-json",
+      "name": "Parse JSON Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        700,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "text": "Validate against JSON schema. On error, retry with feedback."
+      },
+      "id": "retry-note",
+      "name": "Retry Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        700,
+        250
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "id": "1",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty"
+              },
+              "type": "string",
+              "value1": "={{ $json.error }}"
+            }
+          ]
+        }
+      },
+      "id": "check-validation",
+      "name": "Validation Pass?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        900,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "extracted_data",
+              "name": "extracted_data",
+              "type": "object",
+              "value": "={{ $json }}"
+            },
+            {
+              "id": "status",
+              "name": "status",
+              "type": "string",
+              "value": "success"
+            }
+          ]
+        }
+      },
+      "id": "success-branch",
+      "name": "Success Branch",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3,
+      "position": [
+        1100,
+        50
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "id": "1",
+              "operator": {
+                "type": "number",
+                "operation": "lt"
+              },
+              "type": "number",
+              "value1": "={{ $json.retry_count }}",
+              "value2": 2
+            }
+          ]
+        }
+      },
+      "id": "check-retries",
+      "name": "Retries Left?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        1100,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "retry_count",
+              "name": "retry_count",
+              "type": "number",
+              "value": "={{ $json.retry_count + 1 }}"
+            },
+            {
+              "id": "last_error",
+              "name": "last_error",
+              "type": "string",
+              "value": "={{ $json.error }}"
+            }
+          ]
+        }
+      },
+      "id": "retry-increment",
+      "name": "Increment Retry Counter",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3,
+      "position": [
+        1300,
+        150
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "extracted_data",
+              "name": "extracted_data",
+              "type": "object",
+              "value": "null"
+            },
+            {
+              "id": "status",
+              "name": "status",
+              "type": "string",
+              "value": "failed_max_retries"
+            },
+            {
+              "id": "error",
+              "name": "error",
+              "type": "string",
+              "value": "={{ $json.last_error }}"
+            }
+          ]
+        }
+      },
+      "id": "fail-branch",
+      "name": "Fail Branch",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3,
+      "position": [
+        1300,
+        250
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook In": {
+      "main": [
+        [
+          {
+            "node": "Initialize State",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Initialize State": {
+      "main": [
+        [
+          {
+            "node": "Extract via Function Calling",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract via Function Calling": {
+      "main": [
+        [
+          {
+            "node": "Parse JSON Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse JSON Response": {
+      "main": [
+        [
+          {
+            "node": "Validation Pass?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validation Pass?": {
+      "main": [
+        [
+          {
+            "node": "Success Branch",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Retries Left?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Retries Left?": {
+      "main": [
+        [
+          {
+            "node": "Increment Retry Counter",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Fail Branch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Increment Retry Counter": {
+      "main": [
+        [
+          {
+            "node": "Extract via Function Calling",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}
