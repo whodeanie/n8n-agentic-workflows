@@ -1,0 +1,310 @@
+{
+  "name": "06-evaluation-gate-before-publish",
+  "active": true,
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "draft",
+        "responseMode": "lastNode",
+        "authentication": "none"
+      },
+      "id": "webhook-trigger",
+      "name": "Webhook In",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [
+        100,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "text": "Draft content then run eval gate before publishing"
+      },
+      "id": "gate-note",
+      "name": "Gate Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        100,
+        250
+      ]
+    },
+    {
+      "parameters": {
+        "model": "gpt-4o-mini",
+        "temperature": 0.7,
+        "messages": {
+          "messageValues": [
+            {
+              "content": "Draft professional content based on this prompt:\n\n{{ $json.topic }}\n\nMake it informative and well-structured.",
+              "role": "user"
+            }
+          ]
+        }
+      },
+      "id": "draft-content",
+      "name": "Draft Content",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [
+        300,
+        100
+      ],
+      "credentials": {
+        "openAiApi": "={{ $credentials.openAiApi }}"
+      }
+    },
+    {
+      "parameters": {
+        "model": "gpt-4o-mini",
+        "temperature": 0.2,
+        "messages": {
+          "messageValues": [
+            {
+              "content": "Score this content on a scale 1-10 based on: relevance (30%), clarity (30%), completeness (20%), originality (20%).\n\nContent: {{ $json.choices[0].message.content }}\n\nRespond ONLY with JSON: {\"score\": <number>, \"reasoning\": \"<explanation>\", \"improvements\": [\"item1\", \"item2\"]}",
+              "role": "user"
+            }
+          ]
+        }
+      },
+      "id": "eval-scorer",
+      "name": "Eval Scorer",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [
+        500,
+        100
+      ],
+      "credentials": {
+        "openAiApi": "={{ $credentials.openAiApi }}"
+      }
+    },
+    {
+      "parameters": {
+        "text": "Parse eval JSON and check if score >= 7"
+      },
+      "id": "eval-note",
+      "name": "Eval Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        500,
+        250
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "try {\n  const json = JSON.parse(item.json.choices[0].message.content);\n  return [{json}];\n} catch (error) {\n  return {error: error.message};\n}"
+      },
+      "id": "parse-eval",
+      "name": "Parse Eval JSON",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        700,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "id": "1",
+              "operator": {
+                "type": "number",
+                "operation": "gte"
+              },
+              "type": "number",
+              "value1": "={{ $json.score }}",
+              "value2": 7
+            }
+          ]
+        }
+      },
+      "id": "quality-gate",
+      "name": "Quality Gate (Score >= 7)",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        900,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.example.com/publish",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "content",
+              "value": "={{ $json.choices[0].message.content }}"
+            },
+            {
+              "name": "eval_score",
+              "value": "={{ $json.score }}"
+            },
+            {
+              "name": "timestamp",
+              "value": "={{ Date.now() }}"
+            }
+          ]
+        }
+      },
+      "id": "publish-content",
+      "name": "Publish Content",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 1,
+      "position": [
+        1100,
+        50
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "status",
+              "name": "status",
+              "type": "string",
+              "value": "published"
+            },
+            {
+              "id": "score",
+              "name": "score",
+              "type": "number",
+              "value": "={{ $json.score }}"
+            }
+          ]
+        }
+      },
+      "id": "publish-success",
+      "name": "Publish Success",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3,
+      "position": [
+        1300,
+        50
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "status",
+              "name": "status",
+              "type": "string",
+              "value": "rejected_low_quality"
+            },
+            {
+              "id": "score",
+              "name": "score",
+              "type": "number",
+              "value": "={{ $json.score }}"
+            },
+            {
+              "id": "improvements",
+              "name": "improvements",
+              "type": "array",
+              "value": "={{ $json.improvements }}"
+            }
+          ]
+        }
+      },
+      "id": "reject-low-quality",
+      "name": "Reject (Low Quality)",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3,
+      "position": [
+        1100,
+        200
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook In": {
+      "main": [
+        [
+          {
+            "node": "Draft Content",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Draft Content": {
+      "main": [
+        [
+          {
+            "node": "Eval Scorer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Eval Scorer": {
+      "main": [
+        [
+          {
+            "node": "Parse Eval JSON",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Eval JSON": {
+      "main": [
+        [
+          {
+            "node": "Quality Gate (Score >= 7)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Quality Gate (Score >= 7)": {
+      "main": [
+        [
+          {
+            "node": "Publish Content",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Reject (Low Quality)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Publish Content": {
+      "main": [
+        [
+          {
+            "node": "Publish Success",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}
