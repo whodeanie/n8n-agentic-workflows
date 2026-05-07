@@ -1,0 +1,353 @@
+{
+  "name": "04-llm-router",
+  "active": true,
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "route",
+        "responseMode": "lastNode",
+        "authentication": "none"
+      },
+      "id": "webhook-trigger",
+      "name": "Webhook In",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [
+        100,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "text": "Route requests based on intent classification (cheap model)"
+      },
+      "id": "routing-note",
+      "name": "Routing Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        100,
+        250
+      ]
+    },
+    {
+      "parameters": {
+        "model": "gpt-3.5-turbo",
+        "temperature": 0,
+        "messages": {
+          "messageValues": [
+            {
+              "content": "Classify this query into one of these intents: support, billing, technical, general.\n\nQuery: {{ $json.query }}\n\nRespond ONLY with the intent name (no explanation).",
+              "role": "user"
+            }
+          ]
+        }
+      },
+      "id": "classify-intent",
+      "name": "Classify Intent (Cheap Model)",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [
+        300,
+        100
+      ],
+      "credentials": {
+        "openAiApi": "={{ $credentials.openAiApi }}"
+      }
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "intent",
+              "name": "intent",
+              "type": "string",
+              "value": "={{ $json.choices[0].message.content.toLowerCase().trim() }}"
+            },
+            {
+              "id": "query",
+              "name": "query",
+              "type": "string",
+              "value": "={{ $json.query }}"
+            }
+          ]
+        }
+      },
+      "id": "extract-intent",
+      "name": "Extract Intent",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3,
+      "position": [
+        500,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "id": "1",
+              "operator": {
+                "type": "string",
+                "operation": "contains"
+              },
+              "type": "string",
+              "value1": "={{ $json.intent }}",
+              "value2": "support"
+            }
+          ]
+        }
+      },
+      "id": "route-gate",
+      "name": "Route Based on Intent",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        700,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "model": "gpt-4o-mini",
+        "temperature": 0.5,
+        "messages": {
+          "messageValues": [
+            {
+              "content": "You are a support specialist. Help with this question: {{ $json.query }}",
+              "role": "user"
+            }
+          ]
+        }
+      },
+      "id": "support-handler",
+      "name": "Support Handler",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [
+        900,
+        50
+      ],
+      "credentials": {
+        "openAiApi": "={{ $credentials.openAiApi }}"
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "id": "1",
+              "operator": {
+                "type": "string",
+                "operation": "contains"
+              },
+              "type": "string",
+              "value1": "={{ $json.intent }}",
+              "value2": "billing"
+            }
+          ]
+        }
+      },
+      "id": "check-billing",
+      "name": "Check for Billing",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        700,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "model": "gpt-4o-mini",
+        "temperature": 0.3,
+        "messages": {
+          "messageValues": [
+            {
+              "content": "You are a billing expert. Address this billing question: {{ $json.query }}\n\nBe precise about pricing and terms.",
+              "role": "user"
+            }
+          ]
+        }
+      },
+      "id": "billing-handler",
+      "name": "Billing Handler",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [
+        900,
+        150
+      ],
+      "credentials": {
+        "openAiApi": "={{ $credentials.openAiApi }}"
+      }
+    },
+    {
+      "parameters": {
+        "model": "gpt-4o-mini",
+        "temperature": 0.7,
+        "messages": {
+          "messageValues": [
+            {
+              "content": "Answer this query: {{ $json.query }}\n\nProvide a helpful, accurate response.",
+              "role": "user"
+            }
+          ]
+        }
+      },
+      "id": "general-handler",
+      "name": "General Handler",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [
+        900,
+        300
+      ],
+      "credentials": {
+        "openAiApi": "={{ $credentials.openAiApi }}"
+      }
+    },
+    {
+      "parameters": {
+        "text": "Merge responses from all branches"
+      },
+      "id": "merge-note",
+      "name": "Merge Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        1100,
+        250
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "append"
+      },
+      "id": "merge-responses",
+      "name": "Merge",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 2,
+      "position": [
+        1100,
+        150
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook In": {
+      "main": [
+        [
+          {
+            "node": "Classify Intent (Cheap Model)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Classify Intent (Cheap Model)": {
+      "main": [
+        [
+          {
+            "node": "Extract Intent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Intent": {
+      "main": [
+        [
+          {
+            "node": "Route Based on Intent",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Check for Billing",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route Based on Intent": {
+      "main": [
+        [
+          {
+            "node": "Support Handler",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "General Handler",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check for Billing": {
+      "main": [
+        [
+          {
+            "node": "Billing Handler",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "General Handler",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Support Handler": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Billing Handler": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "General Handler": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 2
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}
