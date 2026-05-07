@@ -1,0 +1,370 @@
+{
+  "name": "02-self-correcting-agent",
+  "active": true,
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "task",
+        "responseMode": "lastNode",
+        "authentication": "none"
+      },
+      "id": "webhook-trigger",
+      "name": "Webhook In",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [
+        100,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "text": "Initialize loop counter and attempts counter"
+      },
+      "id": "init-note",
+      "name": "Init Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        100,
+        250
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "task",
+              "name": "task",
+              "type": "string",
+              "value": "={{ $json.task }}"
+            },
+            {
+              "id": "attempt",
+              "name": "attempt",
+              "type": "number",
+              "value": 1
+            },
+            {
+              "id": "max_attempts",
+              "name": "max_attempts",
+              "type": "number",
+              "value": 3
+            }
+          ]
+        }
+      },
+      "id": "set-initial",
+      "name": "Set Initial State",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3,
+      "position": [
+        300,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "model": "gpt-4o-mini",
+        "temperature": 0.7,
+        "messages": {
+          "messageValues": [
+            {
+              "content": "Complete this task: {{ $json.task }}\n\nProvide a clear, structured response.",
+              "role": "user"
+            }
+          ]
+        }
+      },
+      "id": "generate-output",
+      "name": "Generate Output",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [
+        500,
+        100
+      ],
+      "credentials": {
+        "openAiApi": "={{ $credentials.openAiApi }}"
+      }
+    },
+    {
+      "parameters": {
+        "model": "gpt-4o-mini",
+        "temperature": 0.5,
+        "messages": {
+          "messageValues": [
+            {
+              "content": "Evaluate the quality of this output on a scale 1-10. Does it fully address the task?\n\nTask: {{ $json.task }}\nOutput: {{ $json.choices[0].message.content }}\n\nRespond with ONLY a JSON object: {\"score\": <number>, \"passed\": <boolean>, \"feedback\": \"<explanation>\"}",
+              "role": "user"
+            }
+          ]
+        }
+      },
+      "id": "quality-check",
+      "name": "Quality Check (LLM Judge)",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [
+        700,
+        100
+      ],
+      "credentials": {
+        "openAiApi": "={{ $credentials.openAiApi }}"
+      }
+    },
+    {
+      "parameters": {
+        "text": "Parse JSON response and check if score >= 7"
+      },
+      "id": "judgment-note",
+      "name": "Judgment Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        700,
+        250
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "id": "1",
+              "operator": {
+                "type": "string",
+                "operation": "contains"
+              },
+              "type": "string",
+              "value1": "={{ $json.choices[0].message.content }}",
+              "value2": "\"passed\": true"
+            }
+          ]
+        }
+      },
+      "id": "check-quality",
+      "name": "Check Quality Gate",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        900,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "final_output",
+              "name": "final_output",
+              "type": "string",
+              "value": "={{ $json.choices[0].message.content }}"
+            },
+            {
+              "id": "status",
+              "name": "status",
+              "type": "string",
+              "value": "passed"
+            },
+            {
+              "id": "attempts_used",
+              "name": "attempts_used",
+              "type": "number",
+              "value": "={{ $json.attempt }}"
+            }
+          ]
+        }
+      },
+      "id": "pass-branch",
+      "name": "Pass Branch",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3,
+      "position": [
+        1100,
+        50
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "id": "1",
+              "operator": {
+                "type": "number",
+                "operation": "lt"
+              },
+              "type": "number",
+              "value1": "={{ $json.attempt }}",
+              "value2": 3
+            }
+          ]
+        }
+      },
+      "id": "retry-check",
+      "name": "Attempt < Max?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        1100,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "attempt",
+              "name": "attempt",
+              "type": "number",
+              "value": "={{ $json.attempt + 1 }}"
+            },
+            {
+              "id": "task",
+              "name": "task",
+              "type": "string",
+              "value": "={{ $json.task }}. Previous feedback: fix quality issues. Retry."
+            }
+          ]
+        }
+      },
+      "id": "increment-attempt",
+      "name": "Increment and Retry",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3,
+      "position": [
+        1300,
+        150
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "final_output",
+              "name": "final_output",
+              "type": "string",
+              "value": "={{ $json.choices[0].message.content }}"
+            },
+            {
+              "id": "status",
+              "name": "status",
+              "type": "string",
+              "value": "max_attempts_exceeded"
+            }
+          ]
+        }
+      },
+      "id": "fail-branch",
+      "name": "Fail Branch",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3,
+      "position": [
+        1300,
+        250
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook In": {
+      "main": [
+        [
+          {
+            "node": "Set Initial State",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set Initial State": {
+      "main": [
+        [
+          {
+            "node": "Generate Output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Output": {
+      "main": [
+        [
+          {
+            "node": "Quality Check (LLM Judge)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Quality Check (LLM Judge)": {
+      "main": [
+        [
+          {
+            "node": "Check Quality Gate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Quality Gate": {
+      "main": [
+        [
+          {
+            "node": "Pass Branch",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Attempt < Max?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Attempt < Max?": {
+      "main": [
+        [
+          {
+            "node": "Increment and Retry",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Fail Branch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Increment and Retry": {
+      "main": [
+        [
+          {
+            "node": "Generate Output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}
