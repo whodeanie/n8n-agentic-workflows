@@ -1,0 +1,204 @@
+{
+  "name": "01-rag-retrieval-with-citations",
+  "active": true,
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "query",
+        "responseMode": "lastNode",
+        "authentication": "none"
+      },
+      "id": "webhook-trigger",
+      "name": "Webhook In",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [
+        100,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "text": "{{ $json.query }}"
+      },
+      "id": "input-note",
+      "name": "Input Extraction",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        100,
+        250
+      ]
+    },
+    {
+      "parameters": {
+        "model": "text-embedding-3-small",
+        "inputType": "text",
+        "input": "={{ $json.query }}"
+      },
+      "id": "openai-embed",
+      "name": "Embed Query with OpenAI",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [
+        300,
+        100
+      ],
+      "credentials": {
+        "openAiApi": "={{ $credentials.openAiApi }}"
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.pinecone.io/query",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "vector",
+              "value": "={{ $json.data[0].embedding }}"
+            },
+            {
+              "name": "topK",
+              "value": "5"
+            },
+            {
+              "name": "namespace",
+              "value": "default"
+            }
+          ]
+        }
+      },
+      "id": "pinecone-query",
+      "name": "Query Pinecone",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 1,
+      "position": [
+        500,
+        100
+      ],
+      "credentials": {
+        "httpHeaderAuth": "={{ $credentials.pineconeApi }}"
+      }
+    },
+    {
+      "parameters": {
+        "text": "Pinecone returns scored matches with IDs and metadata (source, page, text). Extract top match IDs for citation."
+      },
+      "id": "retrieval-note",
+      "name": "Retrieval Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        500,
+        250
+      ]
+    },
+    {
+      "parameters": {
+        "model": "gpt-4o-mini",
+        "temperature": 0.7,
+        "messages": {
+          "messageValues": [
+            {
+              "content": "You are a citation-aware assistant. Answer the following query using only the retrieved context. Always cite your sources using [Source: {citation}] format.\n\nQuery: {{ $json.query }}\n\nContext:\n{{ $json.body.matches.map(m => m.metadata.text).join('\n---\n') }}\n\nAnswer with citations:",
+              "role": "user"
+            }
+          ]
+        }
+      },
+      "id": "openai-complete",
+      "name": "OpenAI Completion with Citations",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [
+        700,
+        100
+      ],
+      "credentials": {
+        "openAiApi": "={{ $credentials.openAiApi }}"
+      }
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "answer",
+              "name": "answer",
+              "type": "string",
+              "value": "={{ $json.choices[0].message.content }}"
+            },
+            {
+              "id": "citations",
+              "name": "citations",
+              "type": "array",
+              "value": "={{ $json.body.matches }}"
+            }
+          ]
+        }
+      },
+      "id": "format-response",
+      "name": "Format Response",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3,
+      "position": [
+        900,
+        100
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook In": {
+      "main": [
+        [
+          {
+            "node": "Embed Query with OpenAI",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Embed Query with OpenAI": {
+      "main": [
+        [
+          {
+            "node": "Query Pinecone",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Query Pinecone": {
+      "main": [
+        [
+          {
+            "node": "OpenAI Completion with Citations",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Completion with Citations": {
+      "main": [
+        [
+          {
+            "node": "Format Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}
