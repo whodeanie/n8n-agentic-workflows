@@ -1,0 +1,396 @@
+{
+  "name": "05-fallback-model-on-error",
+  "active": true,
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "complete",
+        "responseMode": "lastNode",
+        "authentication": "none"
+      },
+      "id": "webhook-trigger",
+      "name": "Webhook In",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [
+        100,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "text": "Try GPT-4 first. On error, fallback to Claude Haiku, then Gemini Flash."
+      },
+      "id": "fallback-note",
+      "name": "Fallback Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        100,
+        250
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "prompt",
+              "name": "prompt",
+              "type": "string",
+              "value": "={{ $json.prompt }}"
+            },
+            {
+              "id": "current_model",
+              "name": "current_model",
+              "type": "string",
+              "value": "gpt-4"
+            }
+          ]
+        }
+      },
+      "id": "init-state",
+      "name": "Initialize State",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3,
+      "position": [
+        300,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "model": "gpt-4o-mini",
+        "temperature": 0.7,
+        "messages": {
+          "messageValues": [
+            {
+              "content": "{{ $json.prompt }}",
+              "role": "user"
+            }
+          ]
+        }
+      },
+      "id": "try-gpt4",
+      "name": "Try GPT-4",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [
+        500,
+        100
+      ],
+      "credentials": {
+        "openAiApi": "={{ $credentials.openAiApi }}"
+      }
+    },
+    {
+      "parameters": {
+        "text": "GPT-4 error handling: rate limit, auth, timeout"
+      },
+      "id": "gpt4-error-note",
+      "name": "GPT-4 Error Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        500,
+        250
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "id": "1",
+              "operator": {
+                "type": "string",
+                "operation": "isEmpty"
+              },
+              "type": "string",
+              "value1": "={{ $json.error }}"
+            }
+          ]
+        }
+      },
+      "id": "check-gpt4",
+      "name": "GPT-4 Success?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        700,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "response",
+              "name": "response",
+              "type": "string",
+              "value": "={{ $json.choices[0].message.content }}"
+            },
+            {
+              "id": "model_used",
+              "name": "model_used",
+              "type": "string",
+              "value": "gpt-4"
+            }
+          ]
+        }
+      },
+      "id": "success-gpt4",
+      "name": "Success",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3,
+      "position": [
+        900,
+        50
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "model",
+              "value": "claude-3-5-haiku-20241022"
+            },
+            {
+              "name": "max_tokens",
+              "value": "1024"
+            },
+            {
+              "name": "messages",
+              "value": "[{\"role\": \"user\", \"content\": \"{{ $json.prompt }}\"}]"
+            }
+          ]
+        }
+      },
+      "id": "fallback-haiku",
+      "name": "Fallback to Claude Haiku",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 1,
+      "position": [
+        900,
+        200
+      ],
+      "credentials": {
+        "httpHeaderAuth": "={{ $credentials.anthropicApi }}"
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "id": "1",
+              "operator": {
+                "type": "string",
+                "operation": "isEmpty"
+              },
+              "type": "string",
+              "value1": "={{ $json.error }}"
+            }
+          ]
+        }
+      },
+      "id": "check-haiku",
+      "name": "Haiku Success?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        1100,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "response",
+              "name": "response",
+              "type": "string",
+              "value": "={{ $json.content[0].text }}"
+            },
+            {
+              "id": "model_used",
+              "name": "model_used",
+              "type": "string",
+              "value": "claude-haiku"
+            }
+          ]
+        }
+      },
+      "id": "success-haiku",
+      "name": "Success 2",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3,
+      "position": [
+        1300,
+        150
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent",
+        "authentication": "none",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "contents",
+              "value": "[{\"parts\": [{\"text\": \"{{ $json.prompt }}\"}]}]"
+            }
+          ]
+        },
+        "options": {
+          "headers": {
+            "x-goog-api-key": "={{ $credentials.googleApi }}"
+          }
+        }
+      },
+      "id": "fallback-gemini",
+      "name": "Fallback to Gemini Flash",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 1,
+      "position": [
+        1300,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "response",
+              "name": "response",
+              "type": "string",
+              "value": "={{ $json.candidates[0].content.parts[0].text }}"
+            },
+            {
+              "id": "model_used",
+              "name": "model_used",
+              "type": "string",
+              "value": "gemini-flash"
+            }
+          ]
+        }
+      },
+      "id": "success-gemini",
+      "name": "Success 3",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3,
+      "position": [
+        1500,
+        300
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook In": {
+      "main": [
+        [
+          {
+            "node": "Initialize State",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Initialize State": {
+      "main": [
+        [
+          {
+            "node": "Try GPT-4",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Try GPT-4": {
+      "main": [
+        [
+          {
+            "node": "GPT-4 Success?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GPT-4 Success?": {
+      "main": [
+        [
+          {
+            "node": "Success",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Fallback to Claude Haiku",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fallback to Claude Haiku": {
+      "main": [
+        [
+          {
+            "node": "Haiku Success?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Haiku Success?": {
+      "main": [
+        [
+          {
+            "node": "Success 2",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Fallback to Gemini Flash",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fallback to Gemini Flash": {
+      "main": [
+        [
+          {
+            "node": "Success 3",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}
