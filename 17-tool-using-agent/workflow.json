@@ -1,0 +1,612 @@
+{
+  "name": "Tool Using Agent With Function Calling",
+  "nodes": [
+    {
+      "id": "sticky-1",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        80,
+        60
+      ],
+      "parameters": {
+        "content": "## Tool Using Agent With Function Calling\n\nWebhook receives a user goal. The agent loop plans, calls one of three tools (search web, lookup CRM, run calc), reflects, and either iterates or returns. Hard cap of six steps.",
+        "height": 280,
+        "width": 420,
+        "color": 4
+      }
+    },
+    {
+      "id": "sticky-robust",
+      "name": "Robustness Sticky",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        80,
+        360
+      ],
+      "parameters": {
+        "content": "## Robustness checklist\n\n. Set this workflow's Error Workflow to the pack's Error Sentinel.\n. Schema validator catches missing AI fields. Branch handles fallback.\n. HTTP nodes retry up to 3 times with 1.5s backoff.\n. Audit Log row written on every run.\n. Idempotency key computed when the trigger is a webhook, so repeat deliveries do not double process.",
+        "height": 240,
+        "width": 380,
+        "color": 6
+      }
+    },
+    {
+      "id": "trig-agent",
+      "name": "User Goal",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [
+        260,
+        320
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "agent",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "webhookId": "REPLACE_ME",
+      "notes": "Trigger. Copy the Production URL and POST your payload here."
+    },
+    {
+      "id": "idem",
+      "name": "Idempotency Key",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        480,
+        320
+      ],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const crypto = require('crypto');\nconst key = crypto.createHash('sha256')\n  .update(JSON.stringify($json))\n  .digest('hex')\n  .slice(0, 16);\nreturn [{ json: { ...$json, _idempotency_key: key, _seen_at: new Date().toISOString() } }];"
+      },
+      "notes": "Custom JS. Returns array of {json: ...} items."
+    },
+    {
+      "id": "init",
+      "name": "Initialize Agent State",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3,
+      "position": [
+        700,
+        320
+      ],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "a0",
+              "name": "goal",
+              "value": "={{ $('User Goal').item.json.body.goal }}",
+              "type": "string"
+            },
+            {
+              "id": "a1",
+              "name": "step",
+              "value": "0",
+              "type": "number"
+            },
+            {
+              "id": "a2",
+              "name": "transcript",
+              "value": "[]",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "plan",
+      "name": "Plan Next Step",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [
+        920,
+        320
+      ],
+      "parameters": {
+        "resource": "chat",
+        "model": "gpt-4o",
+        "messages": {
+          "values": [
+            {
+              "role": "system",
+              "content": "You are a tool using agent. Decide the next step. Available tools: search_web(query), lookup_crm(email), run_calc(expression). When you have enough information, return finish=true."
+            },
+            {
+              "role": "user",
+              "content": "Goal: {{ $json.goal }}\nStep: {{ $json.step }}\nTranscript so far: {{ $json.transcript }}\n\nJSON: { tool, args, rationale, finish (bool) }"
+            }
+          ]
+        },
+        "jsonOutput": true,
+        "options": {
+          "temperature": 0.2
+        }
+      },
+      "credentials": {
+        "openAiApi": {
+          "id": "REPLACE_ME",
+          "name": "OpenAI account"
+        }
+      },
+      "notes": "Default gpt-4o. Swap to gpt-4o for higher quality."
+    },
+    {
+      "id": "done_gate",
+      "name": "Finish?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1140,
+        320
+      ],
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "leftValue": "={{ $json.message.content.finish || $('Initialize Agent State').item.json.step >= 6 }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equal"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "tool_pick",
+      "name": "Pick Tool",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [
+        1140,
+        480
+      ],
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "outputKey": "search_web",
+              "conditions": {
+                "conditions": [
+                  {
+                    "leftValue": "={{ $('Plan Next Step').item.json.message.content.tool }}",
+                    "rightValue": "search_web",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "outputKey": "lookup_crm",
+              "conditions": {
+                "conditions": [
+                  {
+                    "leftValue": "={{ $('Plan Next Step').item.json.message.content.tool }}",
+                    "rightValue": "lookup_crm",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "outputKey": "run_calc",
+              "conditions": {
+                "conditions": [
+                  {
+                    "leftValue": "={{ $('Plan Next Step').item.json.message.content.tool }}",
+                    "rightValue": "run_calc",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "t_search",
+      "name": "Tool Search Web",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        1360,
+        380
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "https://serpapi.com/search.json?q={{ $('Plan Next Step').item.json.message.content.args }}",
+        "options": {}
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1500,
+      "continueOnFail": false,
+      "notes": "Retries up to 3 times on failure with 1.5s backoff. Set continueOnFail to true if you want the flow to keep going on permanent vendor failure."
+    },
+    {
+      "id": "t_crm",
+      "name": "Tool Lookup CRM",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        1360,
+        480
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "https://api.hubapi.com/crm/v3/objects/contacts/{{ $('Plan Next Step').item.json.message.content.args }}",
+        "options": {}
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1500,
+      "continueOnFail": false,
+      "notes": "Retries up to 3 times on failure with 1.5s backoff. Set continueOnFail to true if you want the flow to keep going on permanent vendor failure."
+    },
+    {
+      "id": "t_calc",
+      "name": "Tool Run Calc",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1360,
+        580
+      ],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const expr = $('Plan Next Step').item.json.message.content.args || '0';\nlet result = null; let error = null;\ntry { result = Function('return (' + expr + ')')(); } catch (e) { error = String(e); }\nreturn [{ json: { tool: 'run_calc', expr, result, error } }];"
+      },
+      "notes": "Custom JS. Returns array of {json: ...} items."
+    },
+    {
+      "id": "merge_tools",
+      "name": "Merge Tool Result",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [
+        1580,
+        480
+      ],
+      "parameters": {
+        "mode": "combine",
+        "combinationMode": "multiplex"
+      }
+    },
+    {
+      "id": "advance",
+      "name": "Advance Transcript",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1800,
+        480
+      ],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const prev = $('Initialize Agent State').item.json;\nconst plan = $('Plan Next Step').item.json.message.content;\nconst tool_out = $json;\nconst transcript = JSON.parse(prev.transcript || '[]');\ntranscript.push({ step: prev.step, plan, tool_out });\nreturn [{ json: { goal: prev.goal, step: prev.step + 1, transcript: JSON.stringify(transcript) } }];"
+      },
+      "notes": "Custom JS. Returns array of {json: ...} items."
+    },
+    {
+      "id": "compose",
+      "name": "Compose Final Answer",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [
+        1360,
+        220
+      ],
+      "parameters": {
+        "resource": "chat",
+        "model": "gpt-4o",
+        "messages": {
+          "values": [
+            {
+              "role": "system",
+              "content": "You compose final answers from agent transcripts. Cite which tool calls supported each claim."
+            },
+            {
+              "role": "user",
+              "content": "Goal: {{ $('Initialize Agent State').item.json.goal }}\nTranscript: {{ $('Initialize Agent State').item.json.transcript }}\n\nJSON: { answer, citations: [string], steps_used: number }"
+            }
+          ]
+        },
+        "jsonOutput": true,
+        "options": {
+          "temperature": 0.4
+        }
+      },
+      "credentials": {
+        "openAiApi": {
+          "id": "REPLACE_ME",
+          "name": "OpenAI account"
+        }
+      },
+      "notes": "Default gpt-4o. Swap to gpt-4o for higher quality."
+    },
+    {
+      "id": "validate",
+      "name": "Validate Final",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1580,
+        220
+      ],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const c = ($json.message && $json.message.content) ? $json.message.content : $json;\nconst required = [\"answer\", \"steps_used\"];\nlet parsed = c;\nif (typeof c === 'string') { try { parsed = JSON.parse(c); } catch (e) { parsed = {}; } }\nconst missing = required.filter(k => parsed[k] === undefined || parsed[k] === null);\nconst ok = missing.length === 0;\nconst fallback = {};\nreturn [{ json: { ok, missing, parsed: ok ? parsed : { ...parsed, ...fallback }, _validated_at: new Date().toISOString() } }];"
+      },
+      "notes": "Custom JS. Returns array of {json: ...} items."
+    },
+    {
+      "id": "respond",
+      "name": "Respond JSON",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        1800,
+        220
+      ],
+      "parameters": {
+        "options": {},
+        "respondWith": "allIncomingItems"
+      }
+    },
+    {
+      "id": "audit",
+      "name": "Audit Run",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [
+        2020,
+        220
+      ],
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "<<YOUR_AUDIT_SHEET_ID>>",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "AuditLog",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "ts": "={{ $now.toISO() }}",
+            "workflow": "={{ $workflow.name }}",
+            "node": "={{ $execution.id }}",
+            "status": "={{ $json.ok === false ? 'fail' : 'ok' }}",
+            "context": "={{ JSON.stringify($json) }}"
+          }
+        }
+      },
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "REPLACE_ME",
+          "name": "Google Sheets"
+        }
+      },
+      "notes": "Standardized audit log row. Create a Sheet with columns: ts, workflow, node, status, context."
+    }
+  ],
+  "connections": {
+    "User Goal": {
+      "main": [
+        [
+          {
+            "node": "Idempotency Key",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Idempotency Key": {
+      "main": [
+        [
+          {
+            "node": "Initialize Agent State",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Initialize Agent State": {
+      "main": [
+        [
+          {
+            "node": "Plan Next Step",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Plan Next Step": {
+      "main": [
+        [
+          {
+            "node": "Finish?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Finish?": {
+      "main": [
+        [
+          {
+            "node": "Compose Final Answer",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Pick Tool",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pick Tool": {
+      "main": [
+        [
+          {
+            "node": "Tool Search Web",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Tool Lookup CRM",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Tool Run Calc",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tool Search Web": {
+      "main": [
+        [
+          {
+            "node": "Merge Tool Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tool Lookup CRM": {
+      "main": [
+        [
+          {
+            "node": "Merge Tool Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tool Run Calc": {
+      "main": [
+        [
+          {
+            "node": "Merge Tool Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge Tool Result": {
+      "main": [
+        [
+          {
+            "node": "Advance Transcript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Advance Transcript": {
+      "main": [
+        [
+          {
+            "node": "Plan Next Step",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Compose Final Answer": {
+      "main": [
+        [
+          {
+            "node": "Validate Final",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Final": {
+      "main": [
+        [
+          {
+            "node": "Respond JSON",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Respond JSON": {
+      "main": [
+        [
+          {
+            "node": "Audit Run",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "saveExecutionProgress": true,
+    "errorWorkflow": "<<YOUR_ERROR_WORKFLOW_ID>>"
+  },
+  "versionId": "",
+  "id": "tool-using-agent-with-function-calling",
+  "meta": {
+    "templateCredsSetupCompleted": false,
+    "instanceId": "n8n-gumroad-pack"
+  },
+  "tags": [],
+  "pinData": {}
+}

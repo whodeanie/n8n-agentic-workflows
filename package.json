@@ -1,0 +1,18 @@
+{
+  "name": "n8n-agentic-workflows",
+  "version": "0.2.0",
+  "private": true,
+  "description": "Validated n8n agentic and business workflow exports.",
+  "type": "module",
+  "scripts": {
+    "catalog": "tsx scripts/validate-workflows.ts --write-catalog",
+    "validate:ts": "tsc --noEmit && tsx scripts/validate-workflows.ts --write-catalog",
+    "validate:py": "python3 scripts/validate_workflows.py && python3 -m pytest tests/test_workflows_valid.py -q",
+    "validate": "npm run validate:ts && npm run validate:py"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.11",
+    "tsx": "^4.16.2",
+    "typescript": "^5.5.3"
+  }
+}

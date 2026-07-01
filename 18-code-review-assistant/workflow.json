@@ -1,0 +1,368 @@
+{
+  "name": "Code Review Assistant For Non Engineers",
+  "nodes": [
+    {
+      "id": "sticky-1",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        80,
+        60
+      ],
+      "parameters": {
+        "content": "## Code Review Assistant For Non Engineers\n\nGitHub PR webhook fires. LLM reviews the diff for security smells, readability, and test coverage gaps. A friendly summary lands in Slack with severity buckets.",
+        "height": 280,
+        "width": 420,
+        "color": 4
+      }
+    },
+    {
+      "id": "trig-pr",
+      "name": "PR Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [
+        260,
+        320
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "pr",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "webhookId": "REPLACE_ME",
+      "notes": "Trigger. Copy the Production URL and POST your payload here."
+    },
+    {
+      "id": "opened",
+      "name": "PR Opened?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        480,
+        320
+      ],
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "leftValue": "={{ $json.body.action }}",
+              "rightValue": "opened",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "diff",
+      "name": "Get Diff",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        700,
+        320
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $json.body.pull_request.diff_url }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "review",
+      "name": "Review Diff",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [
+        920,
+        320
+      ],
+      "parameters": {
+        "resource": "chat",
+        "model": "gpt-4o",
+        "messages": {
+          "values": [
+            {
+              "role": "system",
+              "content": "You review code diffs. Be specific. Categorize each finding into security, readability, or tests. Severity is low, med, or high."
+            },
+            {
+              "role": "user",
+              "content": "Diff: {{ $json.data || $json }}\n\nJSON: { findings: [{ category, severity, file, line, summary, suggestion }], top_risks: [string], coverage_gaps: [string] }"
+            }
+          ]
+        },
+        "jsonOutput": true,
+        "options": {
+          "temperature": 0.2
+        }
+      },
+      "credentials": {
+        "openAiApi": {
+          "id": "REPLACE_ME",
+          "name": "OpenAI account"
+        }
+      },
+      "notes": "Default gpt-4o. Swap to gpt-4o for higher quality."
+    },
+    {
+      "id": "bucket",
+      "name": "Bucket Findings",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1140,
+        320
+      ],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const f = $json.message.content.findings || [];\nconst buckets = { security: [], readability: [], tests: [] };\nf.forEach(x => (buckets[x.category] = buckets[x.category] || []).push(x));\nconst high = f.filter(x => x.severity === 'high').length;\nreturn [{ json: { buckets, high, total: f.length, top_risks: $json.message.content.top_risks, coverage_gaps: $json.message.content.coverage_gaps } }];"
+      },
+      "notes": "Custom JS. Returns array of {json: ...} items."
+    },
+    {
+      "id": "friendly",
+      "name": "Friendly Summary",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [
+        1360,
+        320
+      ],
+      "parameters": {
+        "resource": "chat",
+        "model": "gpt-4o",
+        "messages": {
+          "values": [
+            {
+              "role": "system",
+              "content": "You translate code review findings into a friendly Slack message a product manager would read. Use sections by severity. End with a one line decision."
+            },
+            {
+              "role": "user",
+              "content": "Buckets: {{ JSON.stringify($json.buckets) }}\nHigh count: {{ $json.high }}\nTop risks: {{ JSON.stringify($json.top_risks) }}\nCoverage gaps: {{ JSON.stringify($json.coverage_gaps) }}\n\nJSON: { slack_text, decision (approve|comment|request_changes) }"
+            }
+          ]
+        },
+        "jsonOutput": true,
+        "options": {
+          "temperature": 0.4
+        }
+      },
+      "credentials": {
+        "openAiApi": {
+          "id": "REPLACE_ME",
+          "name": "OpenAI account"
+        }
+      },
+      "notes": "Default gpt-4o. Swap to gpt-4o for higher quality."
+    },
+    {
+      "id": "post",
+      "name": "Post To Slack",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2,
+      "position": [
+        1580,
+        220
+      ],
+      "parameters": {
+        "resource": "message",
+        "operation": "post",
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "code-review",
+          "mode": "name"
+        },
+        "text": "={{ $json.message.content.slack_text }}",
+        "otherOptions": {}
+      },
+      "credentials": {
+        "slackApi": {
+          "id": "REPLACE_ME",
+          "name": "Slack account"
+        }
+      }
+    },
+    {
+      "id": "gh_review",
+      "name": "GitHub PR Review",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        1580,
+        420
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('PR Webhook').item.json.body.pull_request.url }}/reviews",
+        "options": {},
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "event",
+              "value": "={{ $json.message.content.decision === 'approve' ? 'APPROVE' : ($json.message.content.decision === 'request_changes' ? 'REQUEST_CHANGES' : 'COMMENT') }}"
+            },
+            {
+              "name": "body",
+              "value": "={{ $json.message.content.slack_text }}"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "ok",
+      "name": "Respond OK",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        1800,
+        320
+      ],
+      "parameters": {
+        "options": {},
+        "respondWith": "allIncomingItems"
+      }
+    },
+    {
+      "id": "sticky-2",
+      "name": "Implementation Notes",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        80,
+        380
+      ],
+      "parameters": {
+        "content": "## Implementation Notes\n\nReplace placeholder credentials before running. Keep the audit/logging nodes on while testing so lead scores, decisions, retries, and escalation paths can be reviewed after each execution.",
+        "height": 260,
+        "width": 420,
+        "color": 5
+      }
+    }
+  ],
+  "connections": {
+    "PR Webhook": {
+      "main": [
+        [
+          {
+            "node": "PR Opened?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "PR Opened?": {
+      "main": [
+        [
+          {
+            "node": "Get Diff",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond OK",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Diff": {
+      "main": [
+        [
+          {
+            "node": "Review Diff",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Review Diff": {
+      "main": [
+        [
+          {
+            "node": "Bucket Findings",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Bucket Findings": {
+      "main": [
+        [
+          {
+            "node": "Friendly Summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Friendly Summary": {
+      "main": [
+        [
+          {
+            "node": "Post To Slack",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "GitHub PR Review",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Post To Slack": {
+      "main": [
+        [
+          {
+            "node": "Respond OK",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GitHub PR Review": {
+      "main": [
+        [
+          {
+            "node": "Respond OK",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "",
+  "id": "code-review-assistant-for-non-engineers",
+  "meta": {
+    "templateCredsSetupCompleted": false,
+    "instanceId": "n8n-gumroad-pack"
+  },
+  "tags": [],
+  "pinData": {}
+}

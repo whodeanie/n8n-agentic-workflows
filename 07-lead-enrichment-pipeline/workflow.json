@@ -1,0 +1,538 @@
+{
+  "name": "Lead Enrichment Pipeline",
+  "nodes": [
+    {
+      "id": "sticky-1",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        80,
+        60
+      ],
+      "parameters": {
+        "content": "## Lead Enrichment Pipeline\n\nForm submission triggers parallel enrichment (LinkedIn lookup, company size, intent signals), normalized record written to CRM with a full provenance trail.",
+        "height": 280,
+        "width": 420,
+        "color": 4
+      }
+    },
+    {
+      "id": "trig-lead",
+      "name": "Form Submit",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [
+        260,
+        320
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "lead",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "webhookId": "REPLACE_ME",
+      "notes": "Trigger. Copy the Production URL and POST your payload here."
+    },
+    {
+      "id": "li",
+      "name": "LinkedIn Lookup",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        480,
+        220
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "https://api.proxycurl.com/api/linkedin/profile?url={{ $json.body.linkedin_url }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "clearbit",
+      "name": "Company Enrich",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        480,
+        320
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "https://company.clearbit.com/v2/companies/find?domain={{ $json.body.email.split('@')[1] }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "intent",
+      "name": "Intent Score",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        480,
+        420
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "https://<<YOUR_INTENT_VENDOR>>/score?email={{ $json.body.email }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "combine",
+      "name": "Combine Enrichments",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [
+        700,
+        320
+      ],
+      "parameters": {
+        "mode": "combine",
+        "combinationMode": "multiplex"
+      }
+    },
+    {
+      "id": "score",
+      "name": "Score Lead",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [
+        920,
+        320
+      ],
+      "parameters": {
+        "resource": "chat",
+        "model": "gpt-4o",
+        "messages": {
+          "values": [
+            {
+              "role": "system",
+              "content": "You score B2B leads. Use ICP fit, company size, role seniority, and intent."
+            },
+            {
+              "role": "user",
+              "content": "Profile: {{ JSON.stringify($json) }}\n\nJSON: { lead_score (0..100), tier (cold|warm|hot), top_signals: [string], suggested_play }"
+            }
+          ]
+        },
+        "jsonOutput": true,
+        "options": {
+          "temperature": 0.4
+        }
+      },
+      "credentials": {
+        "openAiApi": {
+          "id": "REPLACE_ME",
+          "name": "OpenAI account"
+        }
+      },
+      "notes": "Default gpt-4o. Swap to gpt-4o for higher quality."
+    },
+    {
+      "id": "shape",
+      "name": "Shape Record",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3,
+      "position": [
+        1140,
+        320
+      ],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "a0",
+              "name": "email",
+              "value": "={{ $('Form Submit').item.json.body.email }}",
+              "type": "string"
+            },
+            {
+              "id": "a1",
+              "name": "linkedin_url",
+              "value": "={{ $('Form Submit').item.json.body.linkedin_url }}",
+              "type": "string"
+            },
+            {
+              "id": "a2",
+              "name": "lead_score",
+              "value": "={{ $json.message.content.lead_score }}",
+              "type": "number"
+            },
+            {
+              "id": "a3",
+              "name": "tier",
+              "value": "={{ $json.message.content.tier }}",
+              "type": "string"
+            },
+            {
+              "id": "a4",
+              "name": "provenance",
+              "value": "={{ JSON.stringify({ li: $('LinkedIn Lookup').item.json, clearbit: $('Company Enrich').item.json, intent: $('Intent Score').item.json, scored_at: $now.toISO() }) }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "hubspot",
+      "name": "Upsert HubSpot",
+      "type": "n8n-nodes-base.hubspot",
+      "typeVersion": 2,
+      "position": [
+        1360,
+        320
+      ],
+      "parameters": {
+        "resource": "contact",
+        "operation": "upsert",
+        "additionalFields": {
+          "email": "={{ $json.email }}"
+        }
+      },
+      "credentials": {
+        "hubspotApi": {
+          "id": "REPLACE_ME",
+          "name": "HubSpot"
+        }
+      }
+    },
+    {
+      "id": "tier_route",
+      "name": "Tier Route",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [
+        1580,
+        320
+      ],
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "outputKey": "hot",
+              "conditions": {
+                "conditions": [
+                  {
+                    "leftValue": "={{ $('Shape Record').item.json.tier }}",
+                    "rightValue": "hot",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "outputKey": "warm",
+              "conditions": {
+                "conditions": [
+                  {
+                    "leftValue": "={{ $('Shape Record').item.json.tier }}",
+                    "rightValue": "warm",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "notify_hot",
+      "name": "Notify SDR",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2,
+      "position": [
+        1800,
+        220
+      ],
+      "parameters": {
+        "resource": "message",
+        "operation": "post",
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "sdr-hot-leads",
+          "mode": "name"
+        },
+        "text": "Hot lead: {{ $('Shape Record').item.json.email }} score {{ $('Shape Record').item.json.lead_score }}",
+        "otherOptions": {}
+      },
+      "credentials": {
+        "slackApi": {
+          "id": "REPLACE_ME",
+          "name": "Slack account"
+        }
+      }
+    },
+    {
+      "id": "nurture",
+      "name": "Send Nurture",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2,
+      "position": [
+        1800,
+        320
+      ],
+      "parameters": {
+        "operation": "send",
+        "subject": "Hi",
+        "message": "Nurture sequence start",
+        "options": {
+          "sendTo": "={{ $('Shape Record').item.json.email }}",
+          "appendAttribution": false
+        }
+      },
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "REPLACE_ME",
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "id": "cold_log",
+      "name": "Log Cold",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [
+        1800,
+        420
+      ],
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "<<YOUR_SHEET_ID>>",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Sheet1",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {}
+        }
+      },
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "REPLACE_ME",
+          "name": "Google Sheets"
+        }
+      }
+    },
+    {
+      "id": "ok",
+      "name": "Respond OK",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        2020,
+        320
+      ],
+      "parameters": {
+        "options": {},
+        "respondWith": "allIncomingItems"
+      }
+    },
+    {
+      "id": "sticky-2",
+      "name": "Implementation Notes",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        80,
+        380
+      ],
+      "parameters": {
+        "content": "## Implementation Notes\n\nReplace placeholder credentials before running. Keep the audit/logging nodes on while testing so lead scores, decisions, retries, and escalation paths can be reviewed after each execution.",
+        "height": 260,
+        "width": 420,
+        "color": 5
+      }
+    }
+  ],
+  "connections": {
+    "Form Submit": {
+      "main": [
+        [
+          {
+            "node": "LinkedIn Lookup",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Company Enrich",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Intent Score",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "LinkedIn Lookup": {
+      "main": [
+        [
+          {
+            "node": "Combine Enrichments",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Company Enrich": {
+      "main": [
+        [
+          {
+            "node": "Combine Enrichments",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Intent Score": {
+      "main": [
+        [
+          {
+            "node": "Combine Enrichments",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Combine Enrichments": {
+      "main": [
+        [
+          {
+            "node": "Score Lead",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Score Lead": {
+      "main": [
+        [
+          {
+            "node": "Shape Record",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Shape Record": {
+      "main": [
+        [
+          {
+            "node": "Upsert HubSpot",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upsert HubSpot": {
+      "main": [
+        [
+          {
+            "node": "Tier Route",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tier Route": {
+      "main": [
+        [
+          {
+            "node": "Notify SDR",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send Nurture",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Log Cold",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Notify SDR": {
+      "main": [
+        [
+          {
+            "node": "Respond OK",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Nurture": {
+      "main": [
+        [
+          {
+            "node": "Respond OK",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Cold": {
+      "main": [
+        [
+          {
+            "node": "Respond OK",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "",
+  "id": "lead-enrichment-pipeline",
+  "meta": {
+    "templateCredsSetupCompleted": false,
+    "instanceId": "n8n-gumroad-pack"
+  },
+  "tags": [],
+  "pinData": {}
+}

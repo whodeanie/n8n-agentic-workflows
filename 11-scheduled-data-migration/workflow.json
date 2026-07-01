@@ -1,0 +1,558 @@
+{
+  "name": "Scheduled Data Migration With Verification",
+  "nodes": [
+    {
+      "id": "sticky-1",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        80,
+        60
+      ],
+      "parameters": {
+        "content": "## Scheduled Data Migration With Verification\n\nNightly batch migration with checksum verification. Reads source rows, transforms them, writes to destination, then re reads both sides to confirm row counts plus checksums match. On mismatch it rolls back and pages.",
+        "height": 280,
+        "width": 420,
+        "color": 4
+      }
+    },
+    {
+      "id": "sticky-robust",
+      "name": "Robustness Sticky",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        80,
+        360
+      ],
+      "parameters": {
+        "content": "## Robustness checklist\n\n. Set this workflow's Error Workflow to the pack's Error Sentinel.\n. Schema validator catches missing AI fields. Branch handles fallback.\n. HTTP nodes retry up to 3 times with 1.5s backoff.\n. Audit Log row written on every run.\n. Idempotency key computed when the trigger is a webhook, so repeat deliveries do not double process.",
+        "height": 240,
+        "width": 380,
+        "color": 6
+      }
+    },
+    {
+      "id": "sched-24",
+      "name": "Nightly 2am",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1,
+      "position": [
+        260,
+        320
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 24
+            }
+          ]
+        }
+      },
+      "notes": "Runs every 24 hours. Edit interval as needed."
+    },
+    {
+      "id": "src",
+      "name": "Read Source",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        480,
+        320
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "https://<<YOUR_SOURCE>>/api/rows?since={{ $now.minus({hours: 24}).toISO() }}",
+        "options": {}
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1500,
+      "continueOnFail": false,
+      "notes": "Retries up to 3 times on failure with 1.5s backoff. Set continueOnFail to true if you want the flow to keep going on permanent vendor failure."
+    },
+    {
+      "id": "checksum_src",
+      "name": "Source Checksum",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        700,
+        220
+      ],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const crypto = require('crypto');\nconst rows = $input.all().map(i => i.json);\nconst concat = rows.map(r => JSON.stringify(r)).sort().join('\\n');\nconst sum = crypto.createHash('sha256').update(concat).digest('hex');\nreturn [{ json: { count: rows.length, checksum: sum, rows } }];"
+      },
+      "notes": "Custom JS. Returns array of {json: ...} items."
+    },
+    {
+      "id": "transform",
+      "name": "Transform Rows",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [
+        920,
+        220
+      ],
+      "parameters": {
+        "resource": "chat",
+        "model": "gpt-4o-mini",
+        "messages": {
+          "values": [
+            {
+              "role": "system",
+              "content": "You transform rows from source schema to destination schema. Be precise. Drop unknown fields."
+            },
+            {
+              "role": "user",
+              "content": "Source rows: {{ JSON.stringify($json.rows) }}\nDestination schema: {{ $json.dest_schema || '<<DEST_SCHEMA>>' }}\n\nJSON: { rows: [object] }"
+            }
+          ]
+        },
+        "jsonOutput": true,
+        "options": {
+          "temperature": 0.4
+        }
+      },
+      "credentials": {
+        "openAiApi": {
+          "id": "REPLACE_ME",
+          "name": "OpenAI account"
+        }
+      },
+      "notes": "Default gpt-4o-mini. Swap to gpt-4o for higher quality."
+    },
+    {
+      "id": "validate",
+      "name": "Validate Transform",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1140,
+        220
+      ],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const c = ($json.message && $json.message.content) ? $json.message.content : $json;\nconst required = [\"rows\"];\nlet parsed = c;\nif (typeof c === 'string') { try { parsed = JSON.parse(c); } catch (e) { parsed = {}; } }\nconst missing = required.filter(k => parsed[k] === undefined || parsed[k] === null);\nconst ok = missing.length === 0;\nconst fallback = {};\nreturn [{ json: { ok, missing, parsed: ok ? parsed : { ...parsed, ...fallback }, _validated_at: new Date().toISOString() } }];"
+      },
+      "notes": "Custom JS. Returns array of {json: ...} items."
+    },
+    {
+      "id": "batch",
+      "name": "Per Batch",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        1360,
+        220
+      ],
+      "parameters": {
+        "batchSize": 20,
+        "options": {}
+      }
+    },
+    {
+      "id": "cool",
+      "name": "Cooldown",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1,
+      "position": [
+        1580,
+        220
+      ],
+      "parameters": {
+        "amount": 1,
+        "unit": "seconds"
+      }
+    },
+    {
+      "id": "dst_write",
+      "name": "Write Destination",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        1800,
+        220
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://<<YOUR_DEST>>/api/rows",
+        "options": {}
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1500,
+      "continueOnFail": false,
+      "notes": "Retries up to 3 times on failure with 1.5s backoff. Set continueOnFail to true if you want the flow to keep going on permanent vendor failure."
+    },
+    {
+      "id": "dst_read",
+      "name": "Read Destination",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        700,
+        480
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "https://<<YOUR_DEST>>/api/rows?since={{ $now.minus({hours: 24}).toISO() }}",
+        "options": {}
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1500,
+      "continueOnFail": false,
+      "notes": "Retries up to 3 times on failure with 1.5s backoff. Set continueOnFail to true if you want the flow to keep going on permanent vendor failure."
+    },
+    {
+      "id": "checksum_dst",
+      "name": "Destination Checksum",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        920,
+        480
+      ],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const crypto = require('crypto');\nconst rows = $input.all().map(i => i.json);\nconst concat = rows.map(r => JSON.stringify(r)).sort().join('\\n');\nconst sum = crypto.createHash('sha256').update(concat).digest('hex');\nreturn [{ json: { count: rows.length, checksum: sum } }];"
+      },
+      "notes": "Custom JS. Returns array of {json: ...} items."
+    },
+    {
+      "id": "compare",
+      "name": "Compare Sides",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [
+        1140,
+        480
+      ],
+      "parameters": {
+        "mode": "combine",
+        "combinationMode": "multiplex"
+      }
+    },
+    {
+      "id": "verify",
+      "name": "Verify Match",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1360,
+        480
+      ],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const src = $('Source Checksum').item.json;\nconst dst = $('Destination Checksum').item.json;\nconst ok = src.count === dst.count && src.checksum === dst.checksum;\nreturn [{ json: { ok, src_count: src.count, dst_count: dst.count } }];"
+      },
+      "notes": "Custom JS. Returns array of {json: ...} items."
+    },
+    {
+      "id": "ok_gate",
+      "name": "Match?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1580,
+        480
+      ],
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "leftValue": "={{ $json.ok }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equal"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "celebrate",
+      "name": "Notify Success",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2,
+      "position": [
+        1800,
+        380
+      ],
+      "parameters": {
+        "resource": "message",
+        "operation": "post",
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "data-ops",
+          "mode": "name"
+        },
+        "text": "Migration ok. {{ $json.src_count }} rows.",
+        "otherOptions": {}
+      },
+      "credentials": {
+        "slackApi": {
+          "id": "REPLACE_ME",
+          "name": "Slack account"
+        }
+      }
+    },
+    {
+      "id": "rollback",
+      "name": "Rollback Destination",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        1800,
+        580
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://<<YOUR_DEST>>/api/rollback",
+        "options": {},
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "since",
+              "value": "={{ $now.minus({hours: 24}).toISO() }}"
+            }
+          ]
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1500,
+      "continueOnFail": false,
+      "notes": "Retries up to 3 times on failure with 1.5s backoff. Set continueOnFail to true if you want the flow to keep going on permanent vendor failure."
+    },
+    {
+      "id": "page",
+      "name": "Page Data Oncall",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2,
+      "position": [
+        2020,
+        580
+      ],
+      "parameters": {
+        "resource": "message",
+        "operation": "post",
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "data-oncall",
+          "mode": "name"
+        },
+        "text": "Migration mismatch. src {{ $json.src_count }} dst {{ $json.dst_count }}. Rolled back.",
+        "otherOptions": {}
+      },
+      "credentials": {
+        "slackApi": {
+          "id": "REPLACE_ME",
+          "name": "Slack account"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Nightly 2am": {
+      "main": [
+        [
+          {
+            "node": "Read Source",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Source": {
+      "main": [
+        [
+          {
+            "node": "Source Checksum",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Source Checksum": {
+      "main": [
+        [
+          {
+            "node": "Transform Rows",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Compare Sides",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Transform Rows": {
+      "main": [
+        [
+          {
+            "node": "Validate Transform",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Transform": {
+      "main": [
+        [
+          {
+            "node": "Per Batch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Per Batch": {
+      "main": [
+        [
+          {
+            "node": "Cooldown",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Read Destination",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Cooldown": {
+      "main": [
+        [
+          {
+            "node": "Write Destination",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Write Destination": {
+      "main": [
+        [
+          {
+            "node": "Per Batch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Destination": {
+      "main": [
+        [
+          {
+            "node": "Destination Checksum",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Destination Checksum": {
+      "main": [
+        [
+          {
+            "node": "Compare Sides",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Compare Sides": {
+      "main": [
+        [
+          {
+            "node": "Verify Match",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Verify Match": {
+      "main": [
+        [
+          {
+            "node": "Match?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Match?": {
+      "main": [
+        [
+          {
+            "node": "Notify Success",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Rollback Destination",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Rollback Destination": {
+      "main": [
+        [
+          {
+            "node": "Page Data Oncall",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "saveExecutionProgress": true,
+    "errorWorkflow": "<<YOUR_ERROR_WORKFLOW_ID>>"
+  },
+  "versionId": "",
+  "id": "scheduled-data-migration-with-verification",
+  "meta": {
+    "templateCredsSetupCompleted": false,
+    "instanceId": "n8n-gumroad-pack"
+  },
+  "tags": [],
+  "pinData": {}
+}

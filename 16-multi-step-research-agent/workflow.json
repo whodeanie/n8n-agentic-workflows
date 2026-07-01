@@ -1,0 +1,552 @@
+{
+  "name": "Multi Step Research Agent With Self Correction",
+  "nodes": [
+    {
+      "id": "sticky-1",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        80,
+        60
+      ],
+      "parameters": {
+        "content": "## Multi Step Research Agent With Self Correction\n\nDecomposes a research query into sub queries, runs each against multiple sources, cross checks findings with a second LLM pass, and loops on contradictions until they resolve or a max attempts cap fires.\n\nInputs: { query }. Outputs: { answer, citations, contradictions_resolved, attempts }.",
+        "height": 280,
+        "width": 420,
+        "color": 4
+      }
+    },
+    {
+      "id": "trig-research",
+      "name": "Research Query",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [
+        260,
+        320
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "research",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "webhookId": "REPLACE_ME",
+      "notes": "Trigger. Copy the Production URL and POST your payload here."
+    },
+    {
+      "id": "decompose",
+      "name": "Decompose Query",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [
+        480,
+        320
+      ],
+      "parameters": {
+        "resource": "chat",
+        "model": "gpt-4o-mini",
+        "messages": {
+          "values": [
+            {
+              "role": "system",
+              "content": "You decompose research questions into 3 to 5 atomic sub questions covering distinct angles."
+            },
+            {
+              "role": "user",
+              "content": "Question: {{ $json.body.query }}\n\nJSON: { sub_questions: [string] }"
+            }
+          ]
+        },
+        "jsonOutput": true,
+        "options": {
+          "temperature": 0.4
+        }
+      },
+      "credentials": {
+        "openAiApi": {
+          "id": "REPLACE_ME",
+          "name": "OpenAI account"
+        }
+      },
+      "notes": "Default gpt-4o-mini. Swap to gpt-4o for higher quality."
+    },
+    {
+      "id": "fanout",
+      "name": "Fan Out Sub Queries",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        700,
+        320
+      ],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "return $json.message.content.sub_questions.map((q, i) => ({ json: { sub_q: q, idx: i, attempt: 1 } }));"
+      },
+      "notes": "Custom JS. Returns array of {json: ...} items."
+    },
+    {
+      "id": "split",
+      "name": "Per Sub Query",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        920,
+        320
+      ],
+      "parameters": {
+        "batchSize": 1,
+        "options": {}
+      }
+    },
+    {
+      "id": "serp",
+      "name": "Search SerpAPI",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        1140,
+        220
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "https://serpapi.com/search.json?q={{ $json.sub_q }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "wiki",
+      "name": "Search Wikipedia",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        1140,
+        420
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "https://en.wikipedia.org/w/api.php?action=query&list=search&format=json&srsearch={{ $json.sub_q }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "combine",
+      "name": "Combine Sources",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [
+        1360,
+        320
+      ],
+      "parameters": {
+        "mode": "combine",
+        "combinationMode": "multiplex"
+      }
+    },
+    {
+      "id": "synth",
+      "name": "Synthesize Answer",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [
+        1580,
+        320
+      ],
+      "parameters": {
+        "resource": "chat",
+        "model": "gpt-4o",
+        "messages": {
+          "values": [
+            {
+              "role": "system",
+              "content": "You synthesize answers from search results. Cite the URLs you used."
+            },
+            {
+              "role": "user",
+              "content": "Sub question: {{ $('Per Sub Query').item.json.sub_q }}\nSources: {{ JSON.stringify($json) }}\n\nJSON: { answer, citations: [string] }"
+            }
+          ]
+        },
+        "jsonOutput": true,
+        "options": {
+          "temperature": 0.4
+        }
+      },
+      "credentials": {
+        "openAiApi": {
+          "id": "REPLACE_ME",
+          "name": "OpenAI account"
+        }
+      },
+      "notes": "Default gpt-4o. Swap to gpt-4o for higher quality."
+    },
+    {
+      "id": "judge",
+      "name": "Cross Check Findings",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [
+        1800,
+        320
+      ],
+      "parameters": {
+        "resource": "chat",
+        "model": "gpt-4o",
+        "messages": {
+          "values": [
+            {
+              "role": "system",
+              "content": "You are an independent fact checker. Look for contradictions, missing citations, or unsupported claims. Return needs_refinement true only when you find real issues."
+            },
+            {
+              "role": "user",
+              "content": "Question: {{ $('Per Sub Query').item.json.sub_q }}\nAnswer: {{ $json.message.content.answer }}\nCitations: {{ JSON.stringify($json.message.content.citations) }}\n\nJSON: { needs_refinement (bool), issues: [string], confidence (0..1) }"
+            }
+          ]
+        },
+        "jsonOutput": true,
+        "options": {
+          "temperature": 0.1
+        }
+      },
+      "credentials": {
+        "openAiApi": {
+          "id": "REPLACE_ME",
+          "name": "OpenAI account"
+        }
+      },
+      "notes": "Default gpt-4o. Swap to gpt-4o for higher quality."
+    },
+    {
+      "id": "refine_gate",
+      "name": "Refine?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        2020,
+        320
+      ],
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "leftValue": "={{ $json.message.content.needs_refinement && $('Per Sub Query').item.json.attempt < 3 }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equal"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "increment",
+      "name": "Mark Retry",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2240,
+        220
+      ],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const it = $('Per Sub Query').item.json;\nreturn [{ json: { ...it, attempt: it.attempt + 1, prior_issues: $json.message.content.issues } }];"
+      },
+      "notes": "Custom JS. Returns array of {json: ...} items."
+    },
+    {
+      "id": "accept",
+      "name": "Accept Finding",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3,
+      "position": [
+        2240,
+        420
+      ],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "a0",
+              "name": "sub_q",
+              "value": "={{ $('Per Sub Query').item.json.sub_q }}",
+              "type": "string"
+            },
+            {
+              "id": "a1",
+              "name": "answer",
+              "value": "={{ $('Synthesize Answer').item.json.message.content.answer }}",
+              "type": "string"
+            },
+            {
+              "id": "a2",
+              "name": "citations",
+              "value": "={{ $('Synthesize Answer').item.json.message.content.citations }}",
+              "type": "array"
+            },
+            {
+              "id": "a3",
+              "name": "attempts",
+              "value": "={{ $('Per Sub Query').item.json.attempt }}",
+              "type": "number"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "compose",
+      "name": "Compose Final Answer",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [
+        2460,
+        420
+      ],
+      "parameters": {
+        "resource": "chat",
+        "model": "gpt-4o",
+        "messages": {
+          "values": [
+            {
+              "role": "system",
+              "content": "You compose a clean final answer with inline citations. Be precise."
+            },
+            {
+              "role": "user",
+              "content": "Sub findings: {{ JSON.stringify($input.all().map(i => i.json)) }}\nOriginal question: {{ $('Research Query').item.json.body.query }}\n\nJSON: { answer, citations, contradictions_resolved (bool), attempts: number }"
+            }
+          ]
+        },
+        "jsonOutput": true,
+        "options": {
+          "temperature": 0.4
+        }
+      },
+      "credentials": {
+        "openAiApi": {
+          "id": "REPLACE_ME",
+          "name": "OpenAI account"
+        }
+      },
+      "notes": "Default gpt-4o. Swap to gpt-4o for higher quality."
+    },
+    {
+      "id": "respond",
+      "name": "Respond JSON",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        2680,
+        420
+      ],
+      "parameters": {
+        "options": {},
+        "respondWith": "allIncomingItems"
+      }
+    },
+    {
+      "id": "sticky-2",
+      "name": "Implementation Notes",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        80,
+        380
+      ],
+      "parameters": {
+        "content": "## Implementation Notes\n\nReplace placeholder credentials before running. Keep the audit/logging nodes on while testing so lead scores, decisions, retries, and escalation paths can be reviewed after each execution.",
+        "height": 260,
+        "width": 420,
+        "color": 5
+      }
+    }
+  ],
+  "connections": {
+    "Research Query": {
+      "main": [
+        [
+          {
+            "node": "Decompose Query",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Decompose Query": {
+      "main": [
+        [
+          {
+            "node": "Fan Out Sub Queries",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fan Out Sub Queries": {
+      "main": [
+        [
+          {
+            "node": "Per Sub Query",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Per Sub Query": {
+      "main": [
+        [
+          {
+            "node": "Search SerpAPI",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Search Wikipedia",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Compose Final Answer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Search SerpAPI": {
+      "main": [
+        [
+          {
+            "node": "Combine Sources",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Search Wikipedia": {
+      "main": [
+        [
+          {
+            "node": "Combine Sources",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Combine Sources": {
+      "main": [
+        [
+          {
+            "node": "Synthesize Answer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Synthesize Answer": {
+      "main": [
+        [
+          {
+            "node": "Cross Check Findings",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Cross Check Findings": {
+      "main": [
+        [
+          {
+            "node": "Refine?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Refine?": {
+      "main": [
+        [
+          {
+            "node": "Mark Retry",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Accept Finding",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mark Retry": {
+      "main": [
+        [
+          {
+            "node": "Search SerpAPI",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Search Wikipedia",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Accept Finding": {
+      "main": [
+        [
+          {
+            "node": "Per Sub Query",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Compose Final Answer": {
+      "main": [
+        [
+          {
+            "node": "Respond JSON",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "",
+  "id": "multi-step-research-agent-with-self-correction",
+  "meta": {
+    "templateCredsSetupCompleted": false,
+    "instanceId": "n8n-gumroad-pack"
+  },
+  "tags": [],
+  "pinData": {}
+}

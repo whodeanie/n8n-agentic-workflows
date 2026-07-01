@@ -1,0 +1,480 @@
+{
+  "name": "Financial Reconciliation Agent",
+  "nodes": [
+    {
+      "id": "sticky-1",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        80,
+        60
+      ],
+      "parameters": {
+        "content": "## Financial Reconciliation Agent\n\nBank export ingestion. Transaction categorization. Anomaly detection (uncommon merchant, unusual amount, missed recurring payment). Auto generated monthly report.",
+        "height": 280,
+        "width": 420,
+        "color": 4
+      }
+    },
+    {
+      "id": "trig-bank-import",
+      "name": "Bank Export",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [
+        260,
+        320
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "bank-import",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "webhookId": "REPLACE_ME",
+      "notes": "Trigger. Copy the Production URL and POST your payload here."
+    },
+    {
+      "id": "parse",
+      "name": "Parse CSV",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        480,
+        320
+      ],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const csv = $json.body.csv || '';\nconst [header, ...rows] = csv.trim().split('\\n');\nconst cols = header.split(',');\nreturn rows.map(r => {\n  const vals = r.split(',');\n  const o = {};\n  cols.forEach((c, i) => o[c.trim()] = vals[i]);\n  return { json: o };\n});"
+      },
+      "notes": "Custom JS. Returns array of {json: ...} items."
+    },
+    {
+      "id": "split",
+      "name": "Per Tx",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        700,
+        320
+      ],
+      "parameters": {
+        "batchSize": 10,
+        "options": {}
+      }
+    },
+    {
+      "id": "cat",
+      "name": "Categorize",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [
+        920,
+        320
+      ],
+      "parameters": {
+        "resource": "chat",
+        "model": "gpt-4o-mini",
+        "messages": {
+          "values": [
+            {
+              "role": "system",
+              "content": "Categorize bank transactions to the chart of accounts. Categories: software, marketing, travel, meals, office, contractors, recurring_subscription, payroll, other."
+            },
+            {
+              "role": "user",
+              "content": "Tx: {{ JSON.stringify($json) }}\n\nJSON: { category, deductible (bool), is_recurring (bool) }"
+            }
+          ]
+        },
+        "jsonOutput": true,
+        "options": {
+          "temperature": 0.4
+        }
+      },
+      "credentials": {
+        "openAiApi": {
+          "id": "REPLACE_ME",
+          "name": "OpenAI account"
+        }
+      },
+      "notes": "Default gpt-4o-mini. Swap to gpt-4o for higher quality."
+    },
+    {
+      "id": "anomaly",
+      "name": "Anomaly Detect",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1140,
+        320
+      ],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const t = $json.message.content;\nconst tx = $('Per Tx').item.json;\nconst amt = Math.abs(parseFloat(tx.amount || 0));\nconst flags = [];\nif (amt > 1000) flags.push('large_amount');\nif (!tx.merchant || tx.merchant.length < 3) flags.push('unknown_merchant');\nreturn [{ json: { ...tx, ...t, flags } }];"
+      },
+      "notes": "Custom JS. Returns array of {json: ...} items."
+    },
+    {
+      "id": "ledger",
+      "name": "Append To Ledger",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [
+        1360,
+        320
+      ],
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "<<YOUR_SHEET_ID>>",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Sheet1",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {}
+        }
+      },
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "REPLACE_ME",
+          "name": "Google Sheets"
+        }
+      }
+    },
+    {
+      "id": "flagged",
+      "name": "Has Flags?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1580,
+        320
+      ],
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "leftValue": "={{ $json.flags.length || 0 }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "alert",
+      "name": "Slack Alert",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2,
+      "position": [
+        1800,
+        220
+      ],
+      "parameters": {
+        "resource": "message",
+        "operation": "post",
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "finance-anomalies",
+          "mode": "name"
+        },
+        "text": "Anomaly: {{ $json.merchant }} ${{ $json.amount }} flags={{ JSON.stringify($json.flags) }}",
+        "otherOptions": {}
+      },
+      "credentials": {
+        "slackApi": {
+          "id": "REPLACE_ME",
+          "name": "Slack account"
+        }
+      }
+    },
+    {
+      "id": "sched-720",
+      "name": "Monthly Report",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1,
+      "position": [
+        260,
+        600
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 720
+            }
+          ]
+        }
+      },
+      "notes": "Runs every 720 hours. Edit interval as needed."
+    },
+    {
+      "id": "read_ledger",
+      "name": "Read Ledger Stub",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [
+        480,
+        600
+      ],
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "<<YOUR_SHEET_ID>>",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Sheet1",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {}
+        }
+      },
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "REPLACE_ME",
+          "name": "Google Sheets"
+        }
+      }
+    },
+    {
+      "id": "monthly",
+      "name": "Compose Monthly Report",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [
+        700,
+        600
+      ],
+      "parameters": {
+        "resource": "chat",
+        "model": "gpt-4o",
+        "messages": {
+          "values": [
+            {
+              "role": "system",
+              "content": "You write monthly financial reconciliation reports. Be specific about totals by category and anomalies."
+            },
+            {
+              "role": "user",
+              "content": "Ledger rows: {{ JSON.stringify($input.all().map(i => i.json)) }}\n\nJSON: { subject, body_html, top_anomalies: [string] }"
+            }
+          ]
+        },
+        "jsonOutput": true,
+        "options": {
+          "temperature": 0.4
+        }
+      },
+      "credentials": {
+        "openAiApi": {
+          "id": "REPLACE_ME",
+          "name": "OpenAI account"
+        }
+      },
+      "notes": "Default gpt-4o. Swap to gpt-4o for higher quality."
+    },
+    {
+      "id": "email_report",
+      "name": "Email Report",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2,
+      "position": [
+        920,
+        600
+      ],
+      "parameters": {
+        "operation": "send",
+        "subject": "={{ $json.message.content.subject }}",
+        "message": "={{ $json.message.content.body_html }}",
+        "options": {
+          "sendTo": "<<YOUR_OWNER_EMAIL>>",
+          "appendAttribution": false
+        }
+      },
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "REPLACE_ME",
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "id": "sticky-2",
+      "name": "Implementation Notes",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        80,
+        380
+      ],
+      "parameters": {
+        "content": "## Implementation Notes\n\nReplace placeholder credentials before running. Keep the audit/logging nodes on while testing so lead scores, decisions, retries, and escalation paths can be reviewed after each execution.",
+        "height": 260,
+        "width": 420,
+        "color": 5
+      }
+    }
+  ],
+  "connections": {
+    "Bank Export": {
+      "main": [
+        [
+          {
+            "node": "Parse CSV",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse CSV": {
+      "main": [
+        [
+          {
+            "node": "Per Tx",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Per Tx": {
+      "main": [
+        [
+          {
+            "node": "Categorize",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Categorize": {
+      "main": [
+        [
+          {
+            "node": "Anomaly Detect",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Anomaly Detect": {
+      "main": [
+        [
+          {
+            "node": "Append To Ledger",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Append To Ledger": {
+      "main": [
+        [
+          {
+            "node": "Has Flags?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Flags?": {
+      "main": [
+        [
+          {
+            "node": "Slack Alert",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Per Tx",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Slack Alert": {
+      "main": [
+        [
+          {
+            "node": "Per Tx",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Monthly Report": {
+      "main": [
+        [
+          {
+            "node": "Read Ledger Stub",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Ledger Stub": {
+      "main": [
+        [
+          {
+            "node": "Compose Monthly Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Compose Monthly Report": {
+      "main": [
+        [
+          {
+            "node": "Email Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "",
+  "id": "financial-reconciliation-agent",
+  "meta": {
+    "templateCredsSetupCompleted": false,
+    "instanceId": "n8n-gumroad-pack"
+  },
+  "tags": [],
+  "pinData": {}
+}

@@ -1,0 +1,406 @@
+{
+  "name": "LLM Evaluation Harness",
+  "nodes": [
+    {
+      "id": "sticky-1",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        80,
+        60
+      ],
+      "parameters": {
+        "content": "## LLM Evaluation Harness\n\nManual run on a curated test set. For each test case, runs the candidate prompt, scores against the rubric with a judge model, aggregates pass rate plus per assertion breakdown, emails the report.",
+        "height": 280,
+        "width": 420,
+        "color": 4
+      }
+    },
+    {
+      "id": "sticky-robust",
+      "name": "Robustness Sticky",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        80,
+        360
+      ],
+      "parameters": {
+        "content": "## Robustness checklist\n\n. Set this workflow's Error Workflow to the pack's Error Sentinel.\n. Schema validator catches missing AI fields. Branch handles fallback.\n. HTTP nodes retry up to 3 times with 1.5s backoff.\n. Audit Log row written on every run.\n. Idempotency key computed when the trigger is a webhook, so repeat deliveries do not double process.",
+        "height": 240,
+        "width": 380,
+        "color": 6
+      }
+    },
+    {
+      "id": "manual",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        260,
+        320
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "read",
+      "name": "Read Test Cases",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [
+        480,
+        320
+      ],
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "<<YOUR_SHEET_ID>>",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Sheet1",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {}
+        }
+      },
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "REPLACE_ME",
+          "name": "Google Sheets"
+        }
+      }
+    },
+    {
+      "id": "split",
+      "name": "Per Test",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        700,
+        320
+      ],
+      "parameters": {
+        "batchSize": 1,
+        "options": {}
+      }
+    },
+    {
+      "id": "candidate",
+      "name": "Run Candidate Prompt",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [
+        920,
+        320
+      ],
+      "parameters": {
+        "resource": "chat",
+        "model": "gpt-4o-mini",
+        "messages": {
+          "values": [
+            {
+              "role": "system",
+              "content": "={{ $json.system_prompt }}"
+            },
+            {
+              "role": "user",
+              "content": "={{ $json.user_prompt }}"
+            }
+          ]
+        },
+        "jsonOutput": true,
+        "options": {
+          "temperature": 0.4
+        }
+      },
+      "credentials": {
+        "openAiApi": {
+          "id": "REPLACE_ME",
+          "name": "OpenAI account"
+        }
+      },
+      "notes": "Default gpt-4o-mini. Swap to gpt-4o for higher quality."
+    },
+    {
+      "id": "judge",
+      "name": "LLM Judge",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [
+        1140,
+        320
+      ],
+      "parameters": {
+        "resource": "chat",
+        "model": "gpt-4o",
+        "messages": {
+          "values": [
+            {
+              "role": "system",
+              "content": "You are a strict judge. Score each assertion on the rubric. Be precise about evidence."
+            },
+            {
+              "role": "user",
+              "content": "Test ID: {{ $('Per Test').item.json.id }}\nAssertions: {{ $('Per Test').item.json.assertions }}\nOutput: {{ $json.message.content }}\n\nJSON: { results: [{ assertion, passed (bool), evidence }], score (0..1) }"
+            }
+          ]
+        },
+        "jsonOutput": true,
+        "options": {
+          "temperature": 0.0
+        }
+      },
+      "credentials": {
+        "openAiApi": {
+          "id": "REPLACE_ME",
+          "name": "OpenAI account"
+        }
+      },
+      "notes": "Default gpt-4o. Swap to gpt-4o for higher quality."
+    },
+    {
+      "id": "validate",
+      "name": "Validate Judge",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1360,
+        320
+      ],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const c = ($json.message && $json.message.content) ? $json.message.content : $json;\nconst required = [\"results\", \"score\"];\nlet parsed = c;\nif (typeof c === 'string') { try { parsed = JSON.parse(c); } catch (e) { parsed = {}; } }\nconst missing = required.filter(k => parsed[k] === undefined || parsed[k] === null);\nconst ok = missing.length === 0;\nconst fallback = {};\nreturn [{ json: { ok, missing, parsed: ok ? parsed : { ...parsed, ...fallback }, _validated_at: new Date().toISOString() } }];"
+      },
+      "notes": "Custom JS. Returns array of {json: ...} items."
+    },
+    {
+      "id": "log_run",
+      "name": "Log Run",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [
+        1580,
+        320
+      ],
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "<<YOUR_SHEET_ID>>",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Sheet1",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {}
+        }
+      },
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "REPLACE_ME",
+          "name": "Google Sheets"
+        }
+      }
+    },
+    {
+      "id": "more_gate",
+      "name": "More Tests?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1800,
+        320
+      ],
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "leftValue": "={{ $('Per Test').context.noItemsLeft || false }}",
+              "rightValue": false,
+              "operator": {
+                "type": "boolean",
+                "operation": "equal"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "agg",
+      "name": "Aggregate",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2020,
+        320
+      ],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const all = $input.all().map(i => i.json);\nconst pass_rate = all.reduce((a, b) => a + (b.score || 0), 0) / Math.max(1, all.length);\nreturn [{ json: { pass_rate, total: all.length, by_assertion: {} } }];"
+      },
+      "notes": "Custom JS. Returns array of {json: ...} items."
+    },
+    {
+      "id": "email",
+      "name": "Email Report",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2,
+      "position": [
+        2240,
+        320
+      ],
+      "parameters": {
+        "operation": "send",
+        "subject": "Eval run: pass_rate {{ $json.pass_rate }}",
+        "message": "Total: {{ $json.total }}<br>Pass rate: {{ $json.pass_rate }}",
+        "options": {
+          "sendTo": "<<YOUR_TEAM_EMAIL>>",
+          "appendAttribution": false
+        }
+      },
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "REPLACE_ME",
+          "name": "Gmail account"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "Read Test Cases",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Test Cases": {
+      "main": [
+        [
+          {
+            "node": "Per Test",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Per Test": {
+      "main": [
+        [
+          {
+            "node": "Run Candidate Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run Candidate Prompt": {
+      "main": [
+        [
+          {
+            "node": "LLM Judge",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "LLM Judge": {
+      "main": [
+        [
+          {
+            "node": "Validate Judge",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Judge": {
+      "main": [
+        [
+          {
+            "node": "Log Run",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Run": {
+      "main": [
+        [
+          {
+            "node": "More Tests?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "More Tests?": {
+      "main": [
+        [
+          {
+            "node": "Per Test",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Aggregate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aggregate": {
+      "main": [
+        [
+          {
+            "node": "Email Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "saveExecutionProgress": true,
+    "errorWorkflow": "<<YOUR_ERROR_WORKFLOW_ID>>"
+  },
+  "versionId": "",
+  "id": "llm-evaluation-harness",
+  "meta": {
+    "templateCredsSetupCompleted": false,
+    "instanceId": "n8n-gumroad-pack"
+  },
+  "tags": [],
+  "pinData": {}
+}

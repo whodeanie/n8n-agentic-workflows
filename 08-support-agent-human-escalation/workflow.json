@@ -1,0 +1,545 @@
+{
+  "name": "Customer Support Agent With Human Escalation",
+  "nodes": [
+    {
+      "id": "sticky-1",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        80,
+        60
+      ],
+      "parameters": {
+        "content": "## Customer Support Agent With Human Escalation\n\nInbound ticket gets classified by intent. RAG over a knowledge base handles routine cases. Anything complex, low confidence, or escalation worthy is handed off to a human queue with the full context bundled.",
+        "height": 280,
+        "width": 420,
+        "color": 4
+      }
+    },
+    {
+      "id": "trig-support",
+      "name": "Ticket In",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [
+        260,
+        320
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "support",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "webhookId": "REPLACE_ME",
+      "notes": "Trigger. Copy the Production URL and POST your payload here."
+    },
+    {
+      "id": "classify",
+      "name": "Classify Intent",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [
+        480,
+        320
+      ],
+      "parameters": {
+        "resource": "chat",
+        "model": "gpt-4o-mini",
+        "messages": {
+          "values": [
+            {
+              "role": "system",
+              "content": "Classify support tickets. Categories: how_to, bug_report, billing, complaint, account, feature_request."
+            },
+            {
+              "role": "user",
+              "content": "Subject: {{ $json.body.subject }}\nBody: {{ $json.body.body }}\n\nJSON: { intent, urgency (low|med|high), tone (-1..1) }"
+            }
+          ]
+        },
+        "jsonOutput": true,
+        "options": {
+          "temperature": 0.4
+        }
+      },
+      "credentials": {
+        "openAiApi": {
+          "id": "REPLACE_ME",
+          "name": "OpenAI account"
+        }
+      },
+      "notes": "Default gpt-4o-mini. Swap to gpt-4o for higher quality."
+    },
+    {
+      "id": "route",
+      "name": "Route By Urgency",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [
+        700,
+        320
+      ],
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "outputKey": "high",
+              "conditions": {
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.message.content.urgency }}",
+                    "rightValue": "high",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "outputKey": "complaint",
+              "conditions": {
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.message.content.intent }}",
+                    "rightValue": "complaint",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "embed",
+      "name": "Embed Question",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        920,
+        420
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/embeddings",
+        "options": {},
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "model",
+              "value": "text-embedding-3-small"
+            },
+            {
+              "name": "input",
+              "value": "={{ $('Ticket In').item.json.body.body }}"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "kb",
+      "name": "Pinecone Query",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        1140,
+        420
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.pinecone.io/query",
+        "options": {},
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "vector",
+              "value": "={{ $json.data[0].embedding }}"
+            },
+            {
+              "name": "topK",
+              "value": "5"
+            },
+            {
+              "name": "namespace",
+              "value": "kb"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "rag_answer",
+      "name": "RAG Answer",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [
+        1360,
+        420
+      ],
+      "parameters": {
+        "resource": "chat",
+        "model": "gpt-4o",
+        "messages": {
+          "values": [
+            {
+              "role": "system",
+              "content": "Answer support questions using ONLY the provided KB chunks. If the answer is not present, say need_human is true."
+            },
+            {
+              "role": "user",
+              "content": "Question: {{ $('Ticket In').item.json.body.body }}\nKB chunks: {{ JSON.stringify($json.matches) }}\n\nJSON: { answer, need_human (bool), confidence (0..1), citations: [string] }"
+            }
+          ]
+        },
+        "jsonOutput": true,
+        "options": {
+          "temperature": 0.4
+        }
+      },
+      "credentials": {
+        "openAiApi": {
+          "id": "REPLACE_ME",
+          "name": "OpenAI account"
+        }
+      },
+      "notes": "Default gpt-4o. Swap to gpt-4o for higher quality."
+    },
+    {
+      "id": "conf_gate",
+      "name": "Confident Enough?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1580,
+        420
+      ],
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "leftValue": "={{ !$json.message.content.need_human && $json.message.content.confidence > 0.7 }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equal"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "auto_reply",
+      "name": "Auto Reply",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2,
+      "position": [
+        1800,
+        320
+      ],
+      "parameters": {
+        "operation": "send",
+        "subject": "Re: {{ $('Ticket In').item.json.body.subject }}",
+        "message": "={{ $json.message.content.answer }}",
+        "options": {
+          "sendTo": "={{ $('Ticket In').item.json.body.from }}",
+          "appendAttribution": false
+        }
+      },
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "REPLACE_ME",
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "id": "queue",
+      "name": "Add To Human Queue",
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2,
+      "position": [
+        1800,
+        520
+      ],
+      "parameters": {
+        "operation": "create",
+        "base": {
+          "__rl": true,
+          "value": "<<YOUR_BASE_ID>>",
+          "mode": "id"
+        },
+        "table": {
+          "__rl": true,
+          "value": "<<YOUR_TABLE_NAME>>",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {}
+        }
+      },
+      "credentials": {
+        "airtableTokenApi": {
+          "id": "REPLACE_ME",
+          "name": "Airtable"
+        }
+      }
+    },
+    {
+      "id": "notify_high",
+      "name": "Notify Triage High",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2,
+      "position": [
+        920,
+        220
+      ],
+      "parameters": {
+        "resource": "message",
+        "operation": "post",
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "support-triage",
+          "mode": "name"
+        },
+        "text": "URGENT: {{ $('Ticket In').item.json.body.subject }}",
+        "otherOptions": {}
+      },
+      "credentials": {
+        "slackApi": {
+          "id": "REPLACE_ME",
+          "name": "Slack account"
+        }
+      }
+    },
+    {
+      "id": "notify_complaint",
+      "name": "Notify Triage Complaint",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2,
+      "position": [
+        920,
+        320
+      ],
+      "parameters": {
+        "resource": "message",
+        "operation": "post",
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "support-complaints",
+          "mode": "name"
+        },
+        "text": "Complaint: {{ $('Ticket In').item.json.body.subject }}",
+        "otherOptions": {}
+      },
+      "credentials": {
+        "slackApi": {
+          "id": "REPLACE_ME",
+          "name": "Slack account"
+        }
+      }
+    },
+    {
+      "id": "ok",
+      "name": "Respond OK",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        2020,
+        420
+      ],
+      "parameters": {
+        "options": {},
+        "respondWith": "allIncomingItems"
+      }
+    },
+    {
+      "id": "sticky-2",
+      "name": "Implementation Notes",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        80,
+        380
+      ],
+      "parameters": {
+        "content": "## Implementation Notes\n\nReplace placeholder credentials before running. Keep the audit/logging nodes on while testing so lead scores, decisions, retries, and escalation paths can be reviewed after each execution.",
+        "height": 260,
+        "width": 420,
+        "color": 5
+      }
+    }
+  ],
+  "connections": {
+    "Ticket In": {
+      "main": [
+        [
+          {
+            "node": "Classify Intent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Classify Intent": {
+      "main": [
+        [
+          {
+            "node": "Route By Urgency",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route By Urgency": {
+      "main": [
+        [
+          {
+            "node": "Notify Triage High",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Notify Triage Complaint",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Embed Question",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Embed Question": {
+      "main": [
+        [
+          {
+            "node": "Pinecone Query",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pinecone Query": {
+      "main": [
+        [
+          {
+            "node": "RAG Answer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "RAG Answer": {
+      "main": [
+        [
+          {
+            "node": "Confident Enough?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Confident Enough?": {
+      "main": [
+        [
+          {
+            "node": "Auto Reply",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Add To Human Queue",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Auto Reply": {
+      "main": [
+        [
+          {
+            "node": "Respond OK",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Add To Human Queue": {
+      "main": [
+        [
+          {
+            "node": "Respond OK",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Notify Triage High": {
+      "main": [
+        [
+          {
+            "node": "Add To Human Queue",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Notify Triage Complaint": {
+      "main": [
+        [
+          {
+            "node": "Add To Human Queue",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "",
+  "id": "customer-support-agent-with-human-escalation",
+  "meta": {
+    "templateCredsSetupCompleted": false,
+    "instanceId": "n8n-gumroad-pack"
+  },
+  "tags": [],
+  "pinData": {}
+}

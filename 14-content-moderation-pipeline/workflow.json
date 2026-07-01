@@ -1,0 +1,463 @@
+{
+  "name": "Content Moderation Pipeline",
+  "nodes": [
+    {
+      "id": "sticky-1",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        80,
+        60
+      ],
+      "parameters": {
+        "content": "## Content Moderation Pipeline\n\nInbound text or image URL. OpenAI moderation API first. Then Anthropic safety classifier for nuance. Decisions logged with reasoning. Edge cases are flagged for human review.",
+        "height": 280,
+        "width": 420,
+        "color": 4
+      }
+    },
+    {
+      "id": "trig-moderate",
+      "name": "Submit Content",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [
+        260,
+        320
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "moderate",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "webhookId": "REPLACE_ME",
+      "notes": "Trigger. Copy the Production URL and POST your payload here."
+    },
+    {
+      "id": "openai_mod",
+      "name": "OpenAI Moderation",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        480,
+        320
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/moderations",
+        "options": {},
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "input",
+              "value": "={{ $json.body.text }}"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "flagged",
+      "name": "OpenAI Flagged?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        700,
+        320
+      ],
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "leftValue": "={{ $json.results[0].flagged }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equal"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "deep_check",
+      "name": "Anthropic Safety Pass",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [
+        920,
+        220
+      ],
+      "parameters": {
+        "resource": "chat",
+        "model": "gpt-4o",
+        "messages": {
+          "values": [
+            {
+              "role": "system",
+              "content": "You are a content safety classifier. Apply the policy in plain text. Be precise about which rules trigger and why."
+            },
+            {
+              "role": "user",
+              "content": "Content: {{ $('Submit Content').item.json.body.text }}\nOpenAI flags: {{ JSON.stringify($('OpenAI Moderation').item.json.results[0].categories) }}\n\nJSON: { decision (allow|review|block), policy_hits: [string], rationale, severity (0..10) }"
+            }
+          ]
+        },
+        "jsonOutput": true,
+        "options": {
+          "temperature": 0.1
+        }
+      },
+      "credentials": {
+        "openAiApi": {
+          "id": "REPLACE_ME",
+          "name": "OpenAI account"
+        }
+      },
+      "notes": "Default gpt-4o. Swap to gpt-4o for higher quality."
+    },
+    {
+      "id": "decide",
+      "name": "Apply Decision",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [
+        1140,
+        220
+      ],
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "outputKey": "block",
+              "conditions": {
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.message.content.decision }}",
+                    "rightValue": "block",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "outputKey": "review",
+              "conditions": {
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.message.content.decision }}",
+                    "rightValue": "review",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "log_block",
+      "name": "Log Block",
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2,
+      "position": [
+        1360,
+        120
+      ],
+      "parameters": {
+        "operation": "create",
+        "base": {
+          "__rl": true,
+          "value": "<<YOUR_BASE_ID>>",
+          "mode": "id"
+        },
+        "table": {
+          "__rl": true,
+          "value": "<<YOUR_TABLE_NAME>>",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {}
+        }
+      },
+      "credentials": {
+        "airtableTokenApi": {
+          "id": "REPLACE_ME",
+          "name": "Airtable"
+        }
+      }
+    },
+    {
+      "id": "log_review",
+      "name": "Log Review",
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2,
+      "position": [
+        1360,
+        220
+      ],
+      "parameters": {
+        "operation": "create",
+        "base": {
+          "__rl": true,
+          "value": "<<YOUR_BASE_ID>>",
+          "mode": "id"
+        },
+        "table": {
+          "__rl": true,
+          "value": "<<YOUR_TABLE_NAME>>",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {}
+        }
+      },
+      "credentials": {
+        "airtableTokenApi": {
+          "id": "REPLACE_ME",
+          "name": "Airtable"
+        }
+      }
+    },
+    {
+      "id": "log_allow",
+      "name": "Log Allow",
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2,
+      "position": [
+        1360,
+        420
+      ],
+      "parameters": {
+        "operation": "create",
+        "base": {
+          "__rl": true,
+          "value": "<<YOUR_BASE_ID>>",
+          "mode": "id"
+        },
+        "table": {
+          "__rl": true,
+          "value": "<<YOUR_TABLE_NAME>>",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {}
+        }
+      },
+      "credentials": {
+        "airtableTokenApi": {
+          "id": "REPLACE_ME",
+          "name": "Airtable"
+        }
+      }
+    },
+    {
+      "id": "notify",
+      "name": "Notify Mods",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2,
+      "position": [
+        1580,
+        220
+      ],
+      "parameters": {
+        "resource": "message",
+        "operation": "post",
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "trust-and-safety",
+          "mode": "name"
+        },
+        "text": "Review item: {{ $('Submit Content').item.json.body.text }}",
+        "otherOptions": {}
+      },
+      "credentials": {
+        "slackApi": {
+          "id": "REPLACE_ME",
+          "name": "Slack account"
+        }
+      }
+    },
+    {
+      "id": "respond",
+      "name": "Respond Decision",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        1800,
+        320
+      ],
+      "parameters": {
+        "options": {},
+        "respondWith": "allIncomingItems"
+      }
+    },
+    {
+      "id": "sticky-2",
+      "name": "Implementation Notes",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        80,
+        380
+      ],
+      "parameters": {
+        "content": "## Implementation Notes\n\nReplace placeholder credentials before running. Keep the audit/logging nodes on while testing so lead scores, decisions, retries, and escalation paths can be reviewed after each execution.",
+        "height": 260,
+        "width": 420,
+        "color": 5
+      }
+    }
+  ],
+  "connections": {
+    "Submit Content": {
+      "main": [
+        [
+          {
+            "node": "OpenAI Moderation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Moderation": {
+      "main": [
+        [
+          {
+            "node": "OpenAI Flagged?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Flagged?": {
+      "main": [
+        [
+          {
+            "node": "Anthropic Safety Pass",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Log Allow",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Anthropic Safety Pass": {
+      "main": [
+        [
+          {
+            "node": "Apply Decision",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Apply Decision": {
+      "main": [
+        [
+          {
+            "node": "Log Block",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Log Review",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Log Allow",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Review": {
+      "main": [
+        [
+          {
+            "node": "Notify Mods",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Notify Mods": {
+      "main": [
+        [
+          {
+            "node": "Respond Decision",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Block": {
+      "main": [
+        [
+          {
+            "node": "Respond Decision",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Allow": {
+      "main": [
+        [
+          {
+            "node": "Respond Decision",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "",
+  "id": "content-moderation-pipeline",
+  "meta": {
+    "templateCredsSetupCompleted": false,
+    "instanceId": "n8n-gumroad-pack"
+  },
+  "tags": [],
+  "pinData": {}
+}

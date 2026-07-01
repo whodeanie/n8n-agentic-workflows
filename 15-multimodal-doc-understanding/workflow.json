@@ -1,0 +1,537 @@
+{
+  "name": "Multi Modal Document Understanding",
+  "nodes": [
+    {
+      "id": "sticky-1",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        80,
+        60
+      ],
+      "parameters": {
+        "content": "## Multi Modal Document Understanding\n\nPDF plus image plus form intake. OCR pass with a vision model. Structured extraction with retry. Schema validation. Downstream routing by document type.",
+        "height": 280,
+        "width": 420,
+        "color": 4
+      }
+    },
+    {
+      "id": "trig-doc-intake",
+      "name": "Doc Intake",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [
+        260,
+        320
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "doc-intake",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "webhookId": "REPLACE_ME",
+      "notes": "Trigger. Copy the Production URL and POST your payload here."
+    },
+    {
+      "id": "download",
+      "name": "Download Bytes",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        480,
+        320
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $json.body.file_url }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "ocr",
+      "name": "Vision OCR",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [
+        700,
+        320
+      ],
+      "parameters": {
+        "resource": "chat",
+        "model": "gpt-4o",
+        "messages": {
+          "values": [
+            {
+              "role": "system",
+              "content": "You read documents from images. Return clean structured text with section labels."
+            },
+            {
+              "role": "user",
+              "content": "Image URL: {{ $('Doc Intake').item.json.body.file_url }}\n\nJSON: { doc_type, raw_text, sections: [{label, body}] }"
+            }
+          ]
+        },
+        "jsonOutput": true,
+        "options": {
+          "temperature": 0.4
+        }
+      },
+      "credentials": {
+        "openAiApi": {
+          "id": "REPLACE_ME",
+          "name": "OpenAI account"
+        }
+      },
+      "notes": "Default gpt-4o. Swap to gpt-4o for higher quality."
+    },
+    {
+      "id": "extract",
+      "name": "Schema Extraction",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [
+        920,
+        320
+      ],
+      "parameters": {
+        "resource": "chat",
+        "model": "gpt-4o",
+        "messages": {
+          "values": [
+            {
+              "role": "system",
+              "content": "Extract fields per the doc_type schema. If a field is missing, set it to null."
+            },
+            {
+              "role": "user",
+              "content": "Doc type: {{ $json.message.content.doc_type }}\nText: {{ $json.message.content.raw_text }}\n\nIF doc_type == invoice JSON: { invoice_no, vendor, total, line_items: [{desc, qty, price}], due_date }\nIF doc_type == receipt JSON: { merchant, total, date, items: [string] }\nIF doc_type == form JSON: { form_name, fields: [{label, value}] }"
+            }
+          ]
+        },
+        "jsonOutput": true,
+        "options": {
+          "temperature": 0.1
+        }
+      },
+      "credentials": {
+        "openAiApi": {
+          "id": "REPLACE_ME",
+          "name": "OpenAI account"
+        }
+      },
+      "notes": "Default gpt-4o. Swap to gpt-4o for higher quality."
+    },
+    {
+      "id": "validate",
+      "name": "Validate Against Schema",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1140,
+        320
+      ],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const c = $json.message.content;\nconst required = { invoice: ['invoice_no','vendor','total'], receipt: ['merchant','total'], form: ['form_name','fields'] };\nconst dt = $('Vision OCR').item.json.message.content.doc_type;\nconst missing = (required[dt] || []).filter(k => !c[k]);\nreturn [{ json: { ...c, doc_type: dt, _missing: missing, _ok: missing.length === 0 } }];"
+      },
+      "notes": "Custom JS. Returns array of {json: ...} items."
+    },
+    {
+      "id": "ok_gate",
+      "name": "Schema OK?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1360,
+        320
+      ],
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "leftValue": "={{ $json._ok }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equal"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "retry",
+      "name": "Re Extract With Hints",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [
+        1580,
+        220
+      ],
+      "parameters": {
+        "resource": "chat",
+        "model": "gpt-4o",
+        "messages": {
+          "values": [
+            {
+              "role": "system",
+              "content": "You re extract specific missing fields based on the hints. Look harder at the raw text."
+            },
+            {
+              "role": "user",
+              "content": "Raw text: {{ $('Vision OCR').item.json.message.content.raw_text }}\nMissing fields: {{ JSON.stringify($json._missing) }}\n\nJSON: { filled: object }"
+            }
+          ]
+        },
+        "jsonOutput": true,
+        "options": {
+          "temperature": 0.4
+        }
+      },
+      "credentials": {
+        "openAiApi": {
+          "id": "REPLACE_ME",
+          "name": "OpenAI account"
+        }
+      },
+      "notes": "Default gpt-4o. Swap to gpt-4o for higher quality."
+    },
+    {
+      "id": "route_doc",
+      "name": "Route By Doc Type",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [
+        1800,
+        420
+      ],
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "outputKey": "invoice",
+              "conditions": {
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.doc_type }}",
+                    "rightValue": "invoice",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "outputKey": "receipt",
+              "conditions": {
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.doc_type }}",
+                    "rightValue": "receipt",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "invoice_save",
+      "name": "Save Invoice",
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2,
+      "position": [
+        2020,
+        320
+      ],
+      "parameters": {
+        "operation": "create",
+        "base": {
+          "__rl": true,
+          "value": "<<YOUR_BASE_ID>>",
+          "mode": "id"
+        },
+        "table": {
+          "__rl": true,
+          "value": "<<YOUR_TABLE_NAME>>",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {}
+        }
+      },
+      "credentials": {
+        "airtableTokenApi": {
+          "id": "REPLACE_ME",
+          "name": "Airtable"
+        }
+      }
+    },
+    {
+      "id": "receipt_save",
+      "name": "Save Receipt",
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2,
+      "position": [
+        2020,
+        420
+      ],
+      "parameters": {
+        "operation": "create",
+        "base": {
+          "__rl": true,
+          "value": "<<YOUR_BASE_ID>>",
+          "mode": "id"
+        },
+        "table": {
+          "__rl": true,
+          "value": "<<YOUR_TABLE_NAME>>",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {}
+        }
+      },
+      "credentials": {
+        "airtableTokenApi": {
+          "id": "REPLACE_ME",
+          "name": "Airtable"
+        }
+      }
+    },
+    {
+      "id": "form_save",
+      "name": "Save Form",
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2,
+      "position": [
+        2020,
+        520
+      ],
+      "parameters": {
+        "operation": "create",
+        "base": {
+          "__rl": true,
+          "value": "<<YOUR_BASE_ID>>",
+          "mode": "id"
+        },
+        "table": {
+          "__rl": true,
+          "value": "<<YOUR_TABLE_NAME>>",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {}
+        }
+      },
+      "credentials": {
+        "airtableTokenApi": {
+          "id": "REPLACE_ME",
+          "name": "Airtable"
+        }
+      }
+    },
+    {
+      "id": "done",
+      "name": "Respond Result",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        2240,
+        420
+      ],
+      "parameters": {
+        "options": {},
+        "respondWith": "allIncomingItems"
+      }
+    },
+    {
+      "id": "sticky-2",
+      "name": "Implementation Notes",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        80,
+        380
+      ],
+      "parameters": {
+        "content": "## Implementation Notes\n\nReplace placeholder credentials before running. Keep the audit/logging nodes on while testing so lead scores, decisions, retries, and escalation paths can be reviewed after each execution.",
+        "height": 260,
+        "width": 420,
+        "color": 5
+      }
+    }
+  ],
+  "connections": {
+    "Doc Intake": {
+      "main": [
+        [
+          {
+            "node": "Download Bytes",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Download Bytes": {
+      "main": [
+        [
+          {
+            "node": "Vision OCR",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Vision OCR": {
+      "main": [
+        [
+          {
+            "node": "Schema Extraction",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Schema Extraction": {
+      "main": [
+        [
+          {
+            "node": "Validate Against Schema",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Against Schema": {
+      "main": [
+        [
+          {
+            "node": "Schema OK?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Schema OK?": {
+      "main": [
+        [
+          {
+            "node": "Re Extract With Hints",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Route By Doc Type",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Re Extract With Hints": {
+      "main": [
+        [
+          {
+            "node": "Route By Doc Type",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route By Doc Type": {
+      "main": [
+        [
+          {
+            "node": "Save Invoice",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Save Receipt",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Save Form",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save Invoice": {
+      "main": [
+        [
+          {
+            "node": "Respond Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save Receipt": {
+      "main": [
+        [
+          {
+            "node": "Respond Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save Form": {
+      "main": [
+        [
+          {
+            "node": "Respond Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "",
+  "id": "multi-modal-document-understanding",
+  "meta": {
+    "templateCredsSetupCompleted": false,
+    "instanceId": "n8n-gumroad-pack"
+  },
+  "tags": [],
+  "pinData": {}
+}

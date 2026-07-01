@@ -1,0 +1,437 @@
+{
+  "name": "Real Time Competitive Monitoring",
+  "nodes": [
+    {
+      "id": "sticky-1",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        80,
+        60
+      ],
+      "parameters": {
+        "content": "## Real Time Competitive Monitoring\n\nScheduled scrapers across Pinterest, TikTok, Reddit. Embeddings into Pinecone keep a running corpus of competitor content. Weekly LLM digest on what your competitor is doing differently.",
+        "height": 280,
+        "width": 420,
+        "color": 4
+      }
+    },
+    {
+      "id": "sched-1",
+      "name": "Hourly",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1,
+      "position": [
+        260,
+        320
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 1
+            }
+          ]
+        }
+      },
+      "notes": "Runs every 1 hours. Edit interval as needed."
+    },
+    {
+      "id": "scrape_pin",
+      "name": "Pinterest Scrape",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        480,
+        220
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "https://<<YOUR_SCRAPER>>/pinterest?board=<<COMPETITOR_BOARD>>",
+        "options": {}
+      }
+    },
+    {
+      "id": "scrape_tiktok",
+      "name": "TikTok Scrape",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        480,
+        320
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "https://<<YOUR_SCRAPER>>/tiktok?user=<<COMPETITOR_USER>>",
+        "options": {}
+      }
+    },
+    {
+      "id": "scrape_reddit",
+      "name": "Reddit Scrape",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        480,
+        420
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "https://www.reddit.com/r/<<SUBREDDIT>>/new.json",
+        "options": {}
+      }
+    },
+    {
+      "id": "combine",
+      "name": "Combine Posts",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [
+        700,
+        320
+      ],
+      "parameters": {
+        "mode": "combine",
+        "combinationMode": "multiplex"
+      }
+    },
+    {
+      "id": "norm",
+      "name": "Normalize",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        920,
+        320
+      ],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "return $input.all().map(i => ({ json: { source: i.json.source || 'unknown', id: i.json.id || i.json.url, text: i.json.title || i.json.caption || '', url: i.json.url, ts: new Date().toISOString() } }));"
+      },
+      "notes": "Custom JS. Returns array of {json: ...} items."
+    },
+    {
+      "id": "embed",
+      "name": "Embed",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        1140,
+        320
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/embeddings",
+        "options": {},
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "model",
+              "value": "text-embedding-3-small"
+            },
+            {
+              "name": "input",
+              "value": "={{ $json.text }}"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "upsert",
+      "name": "Pinecone Upsert",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        1360,
+        320
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.pinecone.io/vectors/upsert",
+        "options": {},
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "vectors",
+              "value": "={{ [{ id: $('Normalize').item.json.id, values: $json.data[0].embedding, metadata: $('Normalize').item.json }] }}"
+            },
+            {
+              "name": "namespace",
+              "value": "competitors"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "sched-168",
+      "name": "Weekly Sunday",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1,
+      "position": [
+        260,
+        600
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 168
+            }
+          ]
+        }
+      },
+      "notes": "Runs every 168 hours. Edit interval as needed."
+    },
+    {
+      "id": "query",
+      "name": "Pinecone Recent",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        480,
+        600
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.pinecone.io/query",
+        "options": {},
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "namespace",
+              "value": "competitors"
+            },
+            {
+              "name": "topK",
+              "value": "100"
+            },
+            {
+              "name": "filter",
+              "value": "={{ { ts: { '$gte': new Date(Date.now() - 7*86400000).toISOString() } } }}"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "digest",
+      "name": "Weekly Digest",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [
+        700,
+        600
+      ],
+      "parameters": {
+        "resource": "chat",
+        "model": "gpt-4o",
+        "messages": {
+          "values": [
+            {
+              "role": "system",
+              "content": "You analyze competitor content. Identify what is new this week vs prior weeks, in tone, format, and topic."
+            },
+            {
+              "role": "user",
+              "content": "Posts this week: {{ JSON.stringify($json.matches.map(m => m.metadata)) }}\n\nJSON: { themes: [string], format_shifts: [string], surprises: [string], recommended_responses: [string] }"
+            }
+          ]
+        },
+        "jsonOutput": true,
+        "options": {
+          "temperature": 0.4
+        }
+      },
+      "credentials": {
+        "openAiApi": {
+          "id": "REPLACE_ME",
+          "name": "OpenAI account"
+        }
+      },
+      "notes": "Default gpt-4o. Swap to gpt-4o for higher quality."
+    },
+    {
+      "id": "send",
+      "name": "Email Founder",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2,
+      "position": [
+        920,
+        600
+      ],
+      "parameters": {
+        "operation": "send",
+        "subject": "Weekly competitor digest",
+        "message": "={{ JSON.stringify($json.message.content) }}",
+        "options": {
+          "sendTo": "<<YOUR_FOUNDER_EMAIL>>",
+          "appendAttribution": false
+        }
+      },
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "REPLACE_ME",
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "id": "sticky-2",
+      "name": "Implementation Notes",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        80,
+        380
+      ],
+      "parameters": {
+        "content": "## Implementation Notes\n\nReplace placeholder credentials before running. Keep the audit/logging nodes on while testing so lead scores, decisions, retries, and escalation paths can be reviewed after each execution.",
+        "height": 260,
+        "width": 420,
+        "color": 5
+      }
+    }
+  ],
+  "connections": {
+    "Hourly": {
+      "main": [
+        [
+          {
+            "node": "Pinterest Scrape",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "TikTok Scrape",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Reddit Scrape",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pinterest Scrape": {
+      "main": [
+        [
+          {
+            "node": "Combine Posts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "TikTok Scrape": {
+      "main": [
+        [
+          {
+            "node": "Combine Posts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Reddit Scrape": {
+      "main": [
+        [
+          {
+            "node": "Combine Posts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Combine Posts": {
+      "main": [
+        [
+          {
+            "node": "Normalize",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize": {
+      "main": [
+        [
+          {
+            "node": "Embed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Embed": {
+      "main": [
+        [
+          {
+            "node": "Pinecone Upsert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Weekly Sunday": {
+      "main": [
+        [
+          {
+            "node": "Pinecone Recent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pinecone Recent": {
+      "main": [
+        [
+          {
+            "node": "Weekly Digest",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Weekly Digest": {
+      "main": [
+        [
+          {
+            "node": "Email Founder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "",
+  "id": "real-time-competitive-monitoring",
+  "meta": {
+    "templateCredsSetupCompleted": false,
+    "instanceId": "n8n-gumroad-pack"
+  },
+  "tags": [],
+  "pinData": {}
+}

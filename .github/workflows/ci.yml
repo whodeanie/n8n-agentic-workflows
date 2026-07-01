@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [master]
+    branches: [main]
   pull_request:
-    branches: [master]
+    branches: [main]
 
 jobs:
   validate:
@@ -12,14 +12,28 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Install Node dependencies
+        run: |
+          npm ci
+
+      - name: Run TypeScript workflow validation
+        run: |
+          npm run validate:ts
+
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
       - name: Run workflow validation script
         run: |
-          python scripts/validate_workflows.py
+          python3 scripts/validate_workflows.py
 
       - name: Install test dependencies
         run: |
@@ -27,4 +41,4 @@ jobs:
 
       - name: Run pytest
         run: |
-          pytest tests/test_workflows_valid.py -v
+          python3 -m pytest tests/test_workflows_valid.py -v

@@ -1,0 +1,347 @@
+[
+  {
+    "slug": "01-rag-retrieval-with-citations",
+    "name": "01-rag-retrieval-with-citations",
+    "nodeCount": 7,
+    "stickyNoteCount": 2,
+    "triggerTypes": [
+      "webhook"
+    ],
+    "integrationTypes": [
+      "httpRequest",
+      "openAi",
+      "set",
+      "webhook"
+    ],
+    "workflowPath": "01-rag-retrieval-with-citations/workflow.json"
+  },
+  {
+    "slug": "02-self-correcting-agent",
+    "name": "02-self-correcting-agent",
+    "nodeCount": 11,
+    "stickyNoteCount": 2,
+    "triggerTypes": [
+      "webhook"
+    ],
+    "integrationTypes": [
+      "if",
+      "openAi",
+      "set",
+      "webhook"
+    ],
+    "workflowPath": "02-self-correcting-agent/workflow.json"
+  },
+  {
+    "slug": "03-structured-extraction-with-retry",
+    "name": "03-structured-extraction-with-retry",
+    "nodeCount": 11,
+    "stickyNoteCount": 2,
+    "triggerTypes": [
+      "webhook"
+    ],
+    "integrationTypes": [
+      "code",
+      "if",
+      "openAi",
+      "set",
+      "webhook"
+    ],
+    "workflowPath": "03-structured-extraction-with-retry/workflow.json"
+  },
+  {
+    "slug": "04-llm-router",
+    "name": "04-llm-router",
+    "nodeCount": 11,
+    "stickyNoteCount": 2,
+    "triggerTypes": [
+      "webhook"
+    ],
+    "integrationTypes": [
+      "if",
+      "merge",
+      "openAi",
+      "set",
+      "webhook"
+    ],
+    "workflowPath": "04-llm-router/workflow.json"
+  },
+  {
+    "slug": "05-fallback-model-on-error",
+    "name": "05-fallback-model-on-error",
+    "nodeCount": 12,
+    "stickyNoteCount": 2,
+    "triggerTypes": [
+      "webhook"
+    ],
+    "integrationTypes": [
+      "httpRequest",
+      "if",
+      "openAi",
+      "set",
+      "webhook"
+    ],
+    "workflowPath": "05-fallback-model-on-error/workflow.json"
+  },
+  {
+    "slug": "06-evaluation-gate-before-publish",
+    "name": "06-evaluation-gate-before-publish",
+    "nodeCount": 10,
+    "stickyNoteCount": 2,
+    "triggerTypes": [
+      "webhook"
+    ],
+    "integrationTypes": [
+      "code",
+      "httpRequest",
+      "if",
+      "openAi",
+      "set",
+      "webhook"
+    ],
+    "workflowPath": "06-evaluation-gate-before-publish/workflow.json"
+  },
+  {
+    "slug": "07-lead-enrichment-pipeline",
+    "name": "Lead Enrichment Pipeline",
+    "nodeCount": 15,
+    "stickyNoteCount": 2,
+    "triggerTypes": [
+      "webhook"
+    ],
+    "integrationTypes": [
+      "gmail",
+      "googleSheets",
+      "httpRequest",
+      "hubspot",
+      "merge",
+      "openAi",
+      "respondToWebhook",
+      "set",
+      "slack",
+      "switch",
+      "webhook"
+    ],
+    "workflowPath": "07-lead-enrichment-pipeline/workflow.json"
+  },
+  {
+    "slug": "08-support-agent-human-escalation",
+    "name": "Customer Support Agent With Human Escalation",
+    "nodeCount": 14,
+    "stickyNoteCount": 2,
+    "triggerTypes": [
+      "webhook"
+    ],
+    "integrationTypes": [
+      "airtable",
+      "gmail",
+      "httpRequest",
+      "if",
+      "openAi",
+      "respondToWebhook",
+      "slack",
+      "switch",
+      "webhook"
+    ],
+    "workflowPath": "08-support-agent-human-escalation/workflow.json"
+  },
+  {
+    "slug": "09-idempotent-webhook-gateway",
+    "name": "Idempotent Webhook Gateway",
+    "nodeCount": 14,
+    "stickyNoteCount": 2,
+    "triggerTypes": [
+      "webhook"
+    ],
+    "integrationTypes": [
+      "code",
+      "executeWorkflow",
+      "googleSheets",
+      "if",
+      "respondToWebhook",
+      "webhook"
+    ],
+    "workflowPath": "09-idempotent-webhook-gateway/workflow.json"
+  },
+  {
+    "slug": "10-financial-reconciliation-agent",
+    "name": "Financial Reconciliation Agent",
+    "nodeCount": 14,
+    "stickyNoteCount": 2,
+    "triggerTypes": [
+      "scheduleTrigger",
+      "webhook"
+    ],
+    "integrationTypes": [
+      "code",
+      "gmail",
+      "googleSheets",
+      "if",
+      "openAi",
+      "scheduleTrigger",
+      "slack",
+      "splitInBatches",
+      "webhook"
+    ],
+    "workflowPath": "10-financial-reconciliation-agent/workflow.json"
+  },
+  {
+    "slug": "11-scheduled-data-migration",
+    "name": "Scheduled Data Migration With Verification",
+    "nodeCount": 18,
+    "stickyNoteCount": 2,
+    "triggerTypes": [
+      "scheduleTrigger"
+    ],
+    "integrationTypes": [
+      "code",
+      "httpRequest",
+      "if",
+      "merge",
+      "openAi",
+      "scheduleTrigger",
+      "slack",
+      "splitInBatches",
+      "wait"
+    ],
+    "workflowPath": "11-scheduled-data-migration/workflow.json"
+  },
+  {
+    "slug": "12-competitive-monitoring",
+    "name": "Real Time Competitive Monitoring",
+    "nodeCount": 14,
+    "stickyNoteCount": 2,
+    "triggerTypes": [
+      "scheduleTrigger"
+    ],
+    "integrationTypes": [
+      "code",
+      "gmail",
+      "httpRequest",
+      "merge",
+      "openAi",
+      "scheduleTrigger"
+    ],
+    "workflowPath": "12-competitive-monitoring/workflow.json"
+  },
+  {
+    "slug": "13-llm-evaluation-harness",
+    "name": "LLM Evaluation Harness",
+    "nodeCount": 12,
+    "stickyNoteCount": 2,
+    "triggerTypes": [
+      "manualTrigger"
+    ],
+    "integrationTypes": [
+      "code",
+      "gmail",
+      "googleSheets",
+      "if",
+      "manualTrigger",
+      "openAi",
+      "splitInBatches"
+    ],
+    "workflowPath": "13-llm-evaluation-harness/workflow.json"
+  },
+  {
+    "slug": "14-content-moderation-pipeline",
+    "name": "Content Moderation Pipeline",
+    "nodeCount": 12,
+    "stickyNoteCount": 2,
+    "triggerTypes": [
+      "webhook"
+    ],
+    "integrationTypes": [
+      "airtable",
+      "httpRequest",
+      "if",
+      "openAi",
+      "respondToWebhook",
+      "slack",
+      "switch",
+      "webhook"
+    ],
+    "workflowPath": "14-content-moderation-pipeline/workflow.json"
+  },
+  {
+    "slug": "15-multimodal-doc-understanding",
+    "name": "Multi Modal Document Understanding",
+    "nodeCount": 14,
+    "stickyNoteCount": 2,
+    "triggerTypes": [
+      "webhook"
+    ],
+    "integrationTypes": [
+      "airtable",
+      "code",
+      "httpRequest",
+      "if",
+      "openAi",
+      "respondToWebhook",
+      "switch",
+      "webhook"
+    ],
+    "workflowPath": "15-multimodal-doc-understanding/workflow.json"
+  },
+  {
+    "slug": "16-multi-step-research-agent",
+    "name": "Multi Step Research Agent With Self Correction",
+    "nodeCount": 16,
+    "stickyNoteCount": 2,
+    "triggerTypes": [
+      "webhook"
+    ],
+    "integrationTypes": [
+      "code",
+      "httpRequest",
+      "if",
+      "merge",
+      "openAi",
+      "respondToWebhook",
+      "set",
+      "splitInBatches",
+      "webhook"
+    ],
+    "workflowPath": "16-multi-step-research-agent/workflow.json"
+  },
+  {
+    "slug": "17-tool-using-agent",
+    "name": "Tool Using Agent With Function Calling",
+    "nodeCount": 17,
+    "stickyNoteCount": 2,
+    "triggerTypes": [
+      "webhook"
+    ],
+    "integrationTypes": [
+      "code",
+      "googleSheets",
+      "httpRequest",
+      "if",
+      "merge",
+      "openAi",
+      "respondToWebhook",
+      "set",
+      "switch",
+      "webhook"
+    ],
+    "workflowPath": "17-tool-using-agent/workflow.json"
+  },
+  {
+    "slug": "18-code-review-assistant",
+    "name": "Code Review Assistant For Non Engineers",
+    "nodeCount": 11,
+    "stickyNoteCount": 2,
+    "triggerTypes": [
+      "webhook"
+    ],
+    "integrationTypes": [
+      "code",
+      "httpRequest",
+      "if",
+      "openAi",
+      "respondToWebhook",
+      "slack",
+      "webhook"
+    ],
+    "workflowPath": "18-code-review-assistant/workflow.json"
+  }
+]
