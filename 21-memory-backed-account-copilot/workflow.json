@@ -1,0 +1,209 @@
+{
+  "name": "Memory Backed Account Copilot",
+  "nodes": [
+    {
+      "id": "sticky-overview",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [80, 60],
+      "parameters": {
+        "content": "## Memory Backed Account Copilot\n\nUses the native n8n AI Agent node with OpenAI model, buffer memory, calculator tool, and structured output parser. A gate prevents low-confidence replies from going straight to the customer.",
+        "height": 270,
+        "width": 430,
+        "color": 4
+      }
+    },
+    {
+      "id": "sticky-memory",
+      "name": "Memory Notes",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [80, 350],
+      "parameters": {
+        "content": "## Memory and safety\n\n. Memory key should be account_id, not raw email.\n. Structured parser requires reply, confidence, risk_level, and next_action.\n. Calculator tool is allowed for numeric account math only.\n. Human review catches low confidence or high risk.",
+        "height": 280,
+        "width": 430,
+        "color": 6
+      }
+    },
+    {
+      "id": "trig-account",
+      "name": "Account Message",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [260, 320],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "account-copilot",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "webhookId": "REPLACE_ME"
+    },
+    {
+      "id": "normalize",
+      "name": "Normalize Account Message",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3,
+      "position": [520, 320],
+      "parameters": {
+        "assignments": { "assignments": [
+          { "id": "n0", "name": "account_id", "value": "={{ $json.body?.account_id ?? $json.account_id ?? 'unknown-account' }}", "type": "string" },
+          { "id": "n1", "name": "contact_email", "value": "={{ $json.body?.contact_email ?? $json.contact_email ?? '' }}", "type": "string" },
+          { "id": "n2", "name": "message", "value": "={{ $json.body?.message ?? $json.message ?? '' }}", "type": "string" },
+          { "id": "n3", "name": "arr", "value": "={{ $json.body?.annual_recurring_revenue ?? $json.annual_recurring_revenue ?? 0 }}", "type": "number" }
+        ] },
+        "options": {}
+      }
+    },
+    {
+      "id": "agent",
+      "name": "Account Copilot Agent",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [800, 320],
+      "parameters": {
+        "promptType": "define",
+        "text": "Account ID: {{ $json.account_id }}\nARR: {{ $json.arr }}\nMessage: {{ $json.message }}\n\nReturn account-safe help. Use the calculator only for numeric account math.",
+        "hasOutputParser": true,
+        "options": {
+          "systemMessage": "You are an account copilot. Be useful, concise, and careful. Do not promise discounts, legal terms, contract changes, credits, or security exceptions. If risk is high or confidence is low, recommend human review.",
+          "maxIterations": 4,
+          "returnIntermediateSteps": true
+        }
+      }
+    },
+    {
+      "id": "model",
+      "name": "OpenAI Chat Model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.3,
+      "position": [760, 600],
+      "parameters": {
+        "model": { "__rl": true, "mode": "list", "value": "gpt-5-mini", "cachedResultName": "gpt-5-mini" },
+        "responsesApiEnabled": true,
+        "options": { "temperature": 0.2, "reasoningEffort": "low", "maxRetries": 2 }
+      },
+      "credentials": { "openAiApi": { "id": "REPLACE_ME", "name": "OpenAI account" } }
+    },
+    {
+      "id": "memory",
+      "name": "Account Memory",
+      "type": "@n8n/n8n-nodes-langchain.memoryBufferWindow",
+      "typeVersion": 1.4,
+      "position": [980, 600],
+      "parameters": {
+        "sessionIdType": "customKey",
+        "sessionKey": "={{ $('Normalize Account Message').item.json.account_id }}",
+        "contextWindowLength": 8
+      }
+    },
+    {
+      "id": "calculator",
+      "name": "Revenue Calculator",
+      "type": "@n8n/n8n-nodes-langchain.toolCalculator",
+      "typeVersion": 1,
+      "position": [1200, 600],
+      "parameters": {}
+    },
+    {
+      "id": "parser",
+      "name": "Structured Reply Parser",
+      "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+      "typeVersion": 1.3,
+      "position": [1420, 600],
+      "parameters": {
+        "schemaType": "fromJson",
+        "jsonSchemaExample": "{ \"reply\": \"Short customer-safe response\", \"confidence\": 0.82, \"risk_level\": \"low\", \"next_action\": \"send_reply\", \"human_summary\": \"Why this is safe or needs review\" }",
+        "autoFix": true
+      }
+    },
+    {
+      "id": "confidence",
+      "name": "Safe To Send?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1080, 320],
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            { "leftValue": "={{ $json.output.confidence >= 0.75 && $json.output.risk_level !== 'high' }}", "rightValue": true, "operator": { "type": "boolean", "operation": "equal" } }
+          ],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "reply",
+      "name": "Prepare Customer Reply",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3,
+      "position": [1320, 220],
+      "parameters": {
+        "assignments": { "assignments": [
+          { "id": "r0", "name": "decision", "value": "send_reply", "type": "string" },
+          { "id": "r1", "name": "reply", "value": "={{ $('Account Copilot Agent').item.json.output.reply }}", "type": "string" },
+          { "id": "r2", "name": "account_id", "value": "={{ $('Normalize Account Message').item.json.account_id }}", "type": "string" }
+        ] },
+        "options": {}
+      }
+    },
+    {
+      "id": "review",
+      "name": "Prepare Human Review",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3,
+      "position": [1320, 420],
+      "parameters": {
+        "assignments": { "assignments": [
+          { "id": "h0", "name": "decision", "value": "human_review", "type": "string" },
+          { "id": "h1", "name": "summary", "value": "={{ $('Account Copilot Agent').item.json.output.human_summary }}", "type": "string" },
+          { "id": "h2", "name": "risk_level", "value": "={{ $('Account Copilot Agent').item.json.output.risk_level }}", "type": "string" }
+        ] },
+        "options": {}
+      }
+    },
+    {
+      "id": "audit",
+      "name": "Audit Copilot Decision",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [1560, 320],
+      "parameters": {
+        "operation": "append",
+        "documentId": { "__rl": true, "value": "<<YOUR_AUDIT_SHEET_ID>>", "mode": "id" },
+        "sheetName": { "__rl": true, "value": "AccountCopilotAudit", "mode": "name" },
+        "columns": { "mappingMode": "defineBelow", "value": { "ts": "={{ $now.toISO() }}", "account_id": "={{ $('Normalize Account Message').item.json.account_id }}", "decision": "={{ $json.decision }}", "context": "={{ JSON.stringify($json) }}" } }
+      },
+      "credentials": { "googleSheetsOAuth2Api": { "id": "REPLACE_ME", "name": "Google Sheets" } }
+    },
+    {
+      "id": "respond",
+      "name": "Respond JSON",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1800, 320],
+      "parameters": { "options": {}, "respondWith": "allIncomingItems" }
+    }
+  ],
+  "connections": {
+    "Account Message": { "main": [[{ "node": "Normalize Account Message", "type": "main", "index": 0 }]] },
+    "Normalize Account Message": { "main": [[{ "node": "Account Copilot Agent", "type": "main", "index": 0 }]] },
+    "Account Copilot Agent": { "main": [[{ "node": "Safe To Send?", "type": "main", "index": 0 }]] },
+    "Safe To Send?": { "main": [
+      [{ "node": "Prepare Customer Reply", "type": "main", "index": 0 }],
+      [{ "node": "Prepare Human Review", "type": "main", "index": 0 }]
+    ] },
+    "Prepare Customer Reply": { "main": [[{ "node": "Audit Copilot Decision", "type": "main", "index": 0 }]] },
+    "Prepare Human Review": { "main": [[{ "node": "Audit Copilot Decision", "type": "main", "index": 0 }]] },
+    "Audit Copilot Decision": { "main": [[{ "node": "Respond JSON", "type": "main", "index": 0 }]] },
+    "OpenAI Chat Model": { "ai_languageModel": [[{ "node": "Account Copilot Agent", "type": "ai_languageModel", "index": 0 }], [{ "node": "Structured Reply Parser", "type": "ai_languageModel", "index": 0 }]] },
+    "Account Memory": { "ai_memory": [[{ "node": "Account Copilot Agent", "type": "ai_memory", "index": 0 }]] },
+    "Revenue Calculator": { "ai_tool": [[{ "node": "Account Copilot Agent", "type": "ai_tool", "index": 0 }]] },
+    "Structured Reply Parser": { "ai_outputParser": [[{ "node": "Account Copilot Agent", "type": "ai_outputParser", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "pinData": {},
+  "versionId": "21-memory-backed-account-copilot"
+}

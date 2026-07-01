@@ -1,0 +1,294 @@
+{
+  "name": "Multi Agent Intake Triage Council",
+  "nodes": [
+    {
+      "id": "sticky-overview",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [80, 60],
+      "parameters": {
+        "content": "## Multi Agent Intake Triage Council\n\nRoutes an inbound request to a specialist prompt, then runs a separate policy-review pass before deciding whether to auto-reply or escalate to a human.",
+        "height": 260,
+        "width": 420,
+        "color": 4
+      }
+    },
+    {
+      "id": "sticky-ops",
+      "name": "Implementation Notes",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [80, 340],
+      "parameters": {
+        "content": "## Guardrails\n\n. Keep specialist prompts narrow.\n. Policy Review is independent from the specialist draft.\n. Auto-reply only when confidence is high and no policy issue is detected.\n. Audit Log records classification, selected specialist, decision, and escalation reason.",
+        "height": 280,
+        "width": 420,
+        "color": 5
+      }
+    },
+    {
+      "id": "trig-intake",
+      "name": "Intake Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [260, 320],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "agentic-intake-triage",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "webhookId": "REPLACE_ME",
+      "notes": "POST { requester_email, subject, message, account_tier }."
+    },
+    {
+      "id": "normalize",
+      "name": "Normalize Request",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3,
+      "position": [500, 320],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            { "id": "n0", "name": "requester_email", "value": "={{ $json.body?.requester_email ?? $json.requester_email ?? '' }}", "type": "string" },
+            { "id": "n1", "name": "subject", "value": "={{ $json.body?.subject ?? $json.subject ?? '' }}", "type": "string" },
+            { "id": "n2", "name": "message", "value": "={{ $json.body?.message ?? $json.message ?? '' }}", "type": "string" },
+            { "id": "n3", "name": "account_tier", "value": "={{ $json.body?.account_tier ?? $json.account_tier ?? 'standard' }}", "type": "string" },
+            { "id": "n4", "name": "received_at", "value": "={{ $now.toISO() }}", "type": "string" }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "classify",
+      "name": "Classify Work Type",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [740, 320],
+      "parameters": {
+        "resource": "chat",
+        "model": "gpt-4o-mini",
+        "messages": {
+          "values": [
+            { "role": "system", "content": "Classify the request into exactly one queue: technical, billing, risk, or general. Return JSON only." },
+            { "role": "user", "content": "Subject: {{ $json.subject }}\nMessage: {{ $json.message }}\nAccount tier: {{ $json.account_tier }}\n\nJSON: { queue, urgency: low|medium|high, confidence: 0..1, rationale }" }
+          ]
+        },
+        "jsonOutput": true,
+        "options": { "temperature": 0.1 }
+      },
+      "credentials": { "openAiApi": { "id": "REPLACE_ME", "name": "OpenAI account" } },
+      "notes": "Classifier is cheap and deterministic. Specialists run only after routing."
+    },
+    {
+      "id": "route",
+      "name": "Route Specialist",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [980, 320],
+      "parameters": {
+        "rules": {
+          "values": [
+            { "outputKey": "technical", "conditions": { "conditions": [{ "leftValue": "={{ $json.message.content.queue }}", "rightValue": "technical", "operator": { "type": "string", "operation": "equals" } }], "combinator": "and" } },
+            { "outputKey": "billing", "conditions": { "conditions": [{ "leftValue": "={{ $json.message.content.queue }}", "rightValue": "billing", "operator": { "type": "string", "operation": "equals" } }], "combinator": "and" } },
+            { "outputKey": "risk", "conditions": { "conditions": [{ "leftValue": "={{ $json.message.content.queue }}", "rightValue": "risk", "operator": { "type": "string", "operation": "equals" } }], "combinator": "and" } }
+          ]
+        },
+        "options": { "fallbackOutput": "extra", "renameFallbackOutput": "general" }
+      }
+    },
+    {
+      "id": "tech",
+      "name": "Technical Specialist",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [1220, 140],
+      "parameters": {
+        "resource": "chat",
+        "model": "gpt-4o",
+        "messages": { "values": [
+          { "role": "system", "content": "You are a technical support specialist. Diagnose likely causes, ask for missing facts, and avoid irreversible actions." },
+          { "role": "user", "content": "Request: {{ $('Normalize Request').item.json.message }}\n\nJSON: { specialist: 'technical', draft, confidence: 0..1, missing_info: [string] }" }
+        ] },
+        "jsonOutput": true,
+        "options": { "temperature": 0.2 }
+      },
+      "credentials": { "openAiApi": { "id": "REPLACE_ME", "name": "OpenAI account" } }
+    },
+    {
+      "id": "billing",
+      "name": "Billing Specialist",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [1220, 300],
+      "parameters": {
+        "resource": "chat",
+        "model": "gpt-4o",
+        "messages": { "values": [
+          { "role": "system", "content": "You are a billing operations specialist. Explain billing state, ask for verification, and do not promise refunds." },
+          { "role": "user", "content": "Request: {{ $('Normalize Request').item.json.message }}\n\nJSON: { specialist: 'billing', draft, confidence: 0..1, missing_info: [string] }" }
+        ] },
+        "jsonOutput": true,
+        "options": { "temperature": 0.2 }
+      },
+      "credentials": { "openAiApi": { "id": "REPLACE_ME", "name": "OpenAI account" } }
+    },
+    {
+      "id": "risk",
+      "name": "Risk Specialist",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [1220, 460],
+      "parameters": {
+        "resource": "chat",
+        "model": "gpt-4o",
+        "messages": { "values": [
+          { "role": "system", "content": "You are a risk specialist. Identify legal, security, privacy, compliance, and customer-trust issues." },
+          { "role": "user", "content": "Request: {{ $('Normalize Request').item.json.message }}\n\nJSON: { specialist: 'risk', draft, confidence: 0..1, missing_info: [string], risk_flags: [string] }" }
+        ] },
+        "jsonOutput": true,
+        "options": { "temperature": 0.1 }
+      },
+      "credentials": { "openAiApi": { "id": "REPLACE_ME", "name": "OpenAI account" } }
+    },
+    {
+      "id": "general",
+      "name": "General Specialist",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [1220, 620],
+      "parameters": {
+        "resource": "chat",
+        "model": "gpt-4o-mini",
+        "messages": { "values": [
+          { "role": "system", "content": "You are a general intake agent. Summarize the request and ask one clear next question if needed." },
+          { "role": "user", "content": "Request: {{ $('Normalize Request').item.json.message }}\n\nJSON: { specialist: 'general', draft, confidence: 0..1, missing_info: [string] }" }
+        ] },
+        "jsonOutput": true,
+        "options": { "temperature": 0.2 }
+      },
+      "credentials": { "openAiApi": { "id": "REPLACE_ME", "name": "OpenAI account" } }
+    },
+    {
+      "id": "policy",
+      "name": "Policy Review",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [1480, 320],
+      "parameters": {
+        "resource": "chat",
+        "model": "gpt-4o",
+        "messages": { "values": [
+          { "role": "system", "content": "You are a separate policy reviewer. Decide if the specialist draft can be sent. Escalate if confidence is low, urgency is high, private data is requested, or policy is unclear." },
+          { "role": "user", "content": "Classifier: {{ JSON.stringify($('Classify Work Type').item.json.message.content) }}\nSpecialist draft: {{ JSON.stringify($json.message.content) }}\n\nJSON: { can_auto_reply: boolean, reason, final_draft, escalation_summary }" }
+        ] },
+        "jsonOutput": true,
+        "options": { "temperature": 0.1 }
+      },
+      "credentials": { "openAiApi": { "id": "REPLACE_ME", "name": "OpenAI account" } }
+    },
+    {
+      "id": "gate",
+      "name": "Auto Reply Allowed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1720, 320],
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            { "leftValue": "={{ $json.message.content.can_auto_reply }}", "rightValue": true, "operator": { "type": "boolean", "operation": "equal" } }
+          ],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "auto",
+      "name": "Prepare Auto Reply",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3,
+      "position": [1960, 220],
+      "parameters": {
+        "assignments": { "assignments": [
+          { "id": "a0", "name": "decision", "value": "auto_reply", "type": "string" },
+          { "id": "a1", "name": "reply", "value": "={{ $('Policy Review').item.json.message.content.final_draft }}", "type": "string" },
+          { "id": "a2", "name": "requester_email", "value": "={{ $('Normalize Request').item.json.requester_email }}", "type": "string" }
+        ] },
+        "options": {}
+      }
+    },
+    {
+      "id": "escalate",
+      "name": "Prepare Human Queue",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3,
+      "position": [1960, 420],
+      "parameters": {
+        "assignments": { "assignments": [
+          { "id": "e0", "name": "decision", "value": "human_queue", "type": "string" },
+          { "id": "e1", "name": "summary", "value": "={{ $('Policy Review').item.json.message.content.escalation_summary }}", "type": "string" },
+          { "id": "e2", "name": "reason", "value": "={{ $('Policy Review').item.json.message.content.reason }}", "type": "string" }
+        ] },
+        "options": {}
+      }
+    },
+    {
+      "id": "audit",
+      "name": "Audit Decision",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [2200, 320],
+      "parameters": {
+        "operation": "append",
+        "documentId": { "__rl": true, "value": "<<YOUR_AUDIT_SHEET_ID>>", "mode": "id" },
+        "sheetName": { "__rl": true, "value": "AuditLog", "mode": "name" },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "ts": "={{ $now.toISO() }}",
+            "workflow": "={{ $workflow.name }}",
+            "status": "={{ $json.decision }}",
+            "context": "={{ JSON.stringify($json) }}"
+          }
+        }
+      },
+      "credentials": { "googleSheetsOAuth2Api": { "id": "REPLACE_ME", "name": "Google Sheets" } }
+    },
+    {
+      "id": "respond",
+      "name": "Respond JSON",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [2440, 320],
+      "parameters": { "options": {}, "respondWith": "allIncomingItems" }
+    }
+  ],
+  "connections": {
+    "Intake Webhook": { "main": [[{ "node": "Normalize Request", "type": "main", "index": 0 }]] },
+    "Normalize Request": { "main": [[{ "node": "Classify Work Type", "type": "main", "index": 0 }]] },
+    "Classify Work Type": { "main": [[{ "node": "Route Specialist", "type": "main", "index": 0 }]] },
+    "Route Specialist": { "main": [
+      [{ "node": "Technical Specialist", "type": "main", "index": 0 }],
+      [{ "node": "Billing Specialist", "type": "main", "index": 0 }],
+      [{ "node": "Risk Specialist", "type": "main", "index": 0 }],
+      [{ "node": "General Specialist", "type": "main", "index": 0 }]
+    ] },
+    "Technical Specialist": { "main": [[{ "node": "Policy Review", "type": "main", "index": 0 }]] },
+    "Billing Specialist": { "main": [[{ "node": "Policy Review", "type": "main", "index": 0 }]] },
+    "Risk Specialist": { "main": [[{ "node": "Policy Review", "type": "main", "index": 0 }]] },
+    "General Specialist": { "main": [[{ "node": "Policy Review", "type": "main", "index": 0 }]] },
+    "Policy Review": { "main": [[{ "node": "Auto Reply Allowed?", "type": "main", "index": 0 }]] },
+    "Auto Reply Allowed?": { "main": [
+      [{ "node": "Prepare Auto Reply", "type": "main", "index": 0 }],
+      [{ "node": "Prepare Human Queue", "type": "main", "index": 0 }]
+    ] },
+    "Prepare Auto Reply": { "main": [[{ "node": "Audit Decision", "type": "main", "index": 0 }]] },
+    "Prepare Human Queue": { "main": [[{ "node": "Audit Decision", "type": "main", "index": 0 }]] },
+    "Audit Decision": { "main": [[{ "node": "Respond JSON", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "pinData": {},
+  "versionId": "19-multi-agent-intake-triage"
+}

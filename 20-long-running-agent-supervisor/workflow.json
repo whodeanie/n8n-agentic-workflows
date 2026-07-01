@@ -1,0 +1,279 @@
+{
+  "name": "Long Running Agent Task Supervisor",
+  "nodes": [
+    {
+      "id": "sticky-overview",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [80, 60],
+      "parameters": {
+        "content": "## Long Running Agent Task Supervisor\n\nBreaks a user goal into bounded steps, executes each step, validates each result, repairs failed work once, checkpoints every step, and summarizes the run.",
+        "height": 260,
+        "width": 430,
+        "color": 4
+      }
+    },
+    {
+      "id": "sticky-checkpoints",
+      "name": "Checkpoint Notes",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [80, 340],
+      "parameters": {
+        "content": "## Reliability notes\n\n. Plan has a max step count.\n. Step validator is separate from executor.\n. Repair is bounded to one pass.\n. Checkpoint rows make partial progress recoverable.\n. SLA gate escalates long or low-confidence runs.",
+        "height": 280,
+        "width": 430,
+        "color": 6
+      }
+    },
+    {
+      "id": "trig-task",
+      "name": "Task Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [260, 320],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "agent-task-supervisor",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "webhookId": "REPLACE_ME"
+    },
+    {
+      "id": "normalize",
+      "name": "Normalize Task",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3,
+      "position": [500, 320],
+      "parameters": {
+        "assignments": { "assignments": [
+          { "id": "n0", "name": "task_id", "value": "={{ $json.body?.task_id ?? $json.task_id ?? $execution.id }}", "type": "string" },
+          { "id": "n1", "name": "goal", "value": "={{ $json.body?.goal ?? $json.goal ?? '' }}", "type": "string" },
+          { "id": "n2", "name": "deadline_minutes", "value": "={{ $json.body?.deadline_minutes ?? $json.deadline_minutes ?? 30 }}", "type": "number" },
+          { "id": "n3", "name": "started_at", "value": "={{ $now.toISO() }}", "type": "string" }
+        ] },
+        "options": {}
+      }
+    },
+    {
+      "id": "plan",
+      "name": "Build Step Plan",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [740, 320],
+      "parameters": {
+        "resource": "chat",
+        "model": "gpt-4o",
+        "messages": { "values": [
+          { "role": "system", "content": "Create a bounded execution plan. Keep it under 6 steps. Each step must have a verifiable expected_output." },
+          { "role": "user", "content": "Goal: {{ $json.goal }}\nDeadline minutes: {{ $json.deadline_minutes }}\n\nJSON: { steps: [{ step_id, action, expected_output, risk }], risk_level: low|medium|high }" }
+        ] },
+        "jsonOutput": true,
+        "options": { "temperature": 0.2 }
+      },
+      "credentials": { "openAiApi": { "id": "REPLACE_ME", "name": "OpenAI account" } }
+    },
+    {
+      "id": "fanout",
+      "name": "Fan Out Planned Steps",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [980, 320],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const content = $json.message?.content ?? $json;\nconst steps = Array.isArray(content.steps) ? content.steps.slice(0, 6) : [];\nreturn steps.map((step, index) => ({ json: { ...step, index, repair_attempted: false, task_id: $('Normalize Task').item.json.task_id, goal: $('Normalize Task').item.json.goal } }));"
+      },
+      "notes": "No network access here. This only expands model output into per-step items."
+    },
+    {
+      "id": "split",
+      "name": "Per Step",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [1220, 320],
+      "parameters": { "batchSize": 1, "options": {} }
+    },
+    {
+      "id": "execute",
+      "name": "Execute Step Agent",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [1460, 260],
+      "parameters": {
+        "resource": "chat",
+        "model": "gpt-4o",
+        "messages": { "values": [
+          { "role": "system", "content": "Execute only the current step. Do not invent completion. Return concise evidence for what was done." },
+          { "role": "user", "content": "Goal: {{ $json.goal }}\nStep: {{ $json.action }}\nExpected output: {{ $json.expected_output }}\n\nJSON: { result, evidence, confidence: 0..1, blockers: [string] }" }
+        ] },
+        "jsonOutput": true,
+        "options": { "temperature": 0.2 }
+      },
+      "credentials": { "openAiApi": { "id": "REPLACE_ME", "name": "OpenAI account" } }
+    },
+    {
+      "id": "validate",
+      "name": "Validate Step Result",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [1700, 260],
+      "parameters": {
+        "resource": "chat",
+        "model": "gpt-4o",
+        "messages": { "values": [
+          { "role": "system", "content": "You are a strict step validator. Pass only if the result satisfies the expected output with evidence." },
+          { "role": "user", "content": "Expected: {{ $('Per Step').item.json.expected_output }}\nResult: {{ JSON.stringify($json.message.content) }}\n\nJSON: { passed: boolean, score: 0..1, issues: [string] }" }
+        ] },
+        "jsonOutput": true,
+        "options": { "temperature": 0.1 }
+      },
+      "credentials": { "openAiApi": { "id": "REPLACE_ME", "name": "OpenAI account" } }
+    },
+    {
+      "id": "passed",
+      "name": "Step Passed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1940, 260],
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            { "leftValue": "={{ $json.message.content.passed }}", "rightValue": true, "operator": { "type": "boolean", "operation": "equal" } }
+          ],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "repair",
+      "name": "Repair Failed Step",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [2180, 420],
+      "parameters": {
+        "resource": "chat",
+        "model": "gpt-4o",
+        "messages": { "values": [
+          { "role": "system", "content": "Repair the failed step once. Address validator issues directly. If impossible, say blocked." },
+          { "role": "user", "content": "Step: {{ $('Per Step').item.json.action }}\nIssues: {{ JSON.stringify($('Validate Step Result').item.json.message.content.issues) }}\n\nJSON: { result, evidence, confidence: 0..1, repaired: true, blockers: [string] }" }
+        ] },
+        "jsonOutput": true,
+        "options": { "temperature": 0.2 }
+      },
+      "credentials": { "openAiApi": { "id": "REPLACE_ME", "name": "OpenAI account" } }
+    },
+    {
+      "id": "checkpoint-pass",
+      "name": "Checkpoint Passed Step",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [2180, 160],
+      "parameters": {
+        "operation": "append",
+        "documentId": { "__rl": true, "value": "<<YOUR_CHECKPOINT_SHEET_ID>>", "mode": "id" },
+        "sheetName": { "__rl": true, "value": "AgentCheckpoints", "mode": "name" },
+        "columns": { "mappingMode": "defineBelow", "value": { "task_id": "={{ $('Per Step').item.json.task_id }}", "step": "={{ $('Per Step').item.json.step_id }}", "status": "passed", "context": "={{ JSON.stringify($json.message.content) }}" } }
+      },
+      "credentials": { "googleSheetsOAuth2Api": { "id": "REPLACE_ME", "name": "Google Sheets" } }
+    },
+    {
+      "id": "checkpoint-repair",
+      "name": "Checkpoint Repaired Step",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [2420, 420],
+      "parameters": {
+        "operation": "append",
+        "documentId": { "__rl": true, "value": "<<YOUR_CHECKPOINT_SHEET_ID>>", "mode": "id" },
+        "sheetName": { "__rl": true, "value": "AgentCheckpoints", "mode": "name" },
+        "columns": { "mappingMode": "defineBelow", "value": { "task_id": "={{ $('Per Step').item.json.task_id }}", "step": "={{ $('Per Step').item.json.step_id }}", "status": "repaired", "context": "={{ JSON.stringify($json.message.content) }}" } }
+      },
+      "credentials": { "googleSheetsOAuth2Api": { "id": "REPLACE_ME", "name": "Google Sheets" } }
+    },
+    {
+      "id": "summary",
+      "name": "Summarize Run",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [1700, 620],
+      "parameters": {
+        "resource": "chat",
+        "model": "gpt-4o-mini",
+        "messages": { "values": [
+          { "role": "system", "content": "Summarize the completed agent run for an operations owner. Include completion, risks, and next action." },
+          { "role": "user", "content": "Task: {{ $('Normalize Task').item.json.goal }}\nCheckpoints were written to the sheet.\n\nJSON: { completion_status, next_action, escalation_needed: boolean, reason }" }
+        ] },
+        "jsonOutput": true,
+        "options": { "temperature": 0.2 }
+      },
+      "credentials": { "openAiApi": { "id": "REPLACE_ME", "name": "OpenAI account" } }
+    },
+    {
+      "id": "sla",
+      "name": "Escalation Needed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1940, 620],
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            { "leftValue": "={{ $json.message.content.escalation_needed }}", "rightValue": true, "operator": { "type": "boolean", "operation": "equal" } }
+          ],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "notify",
+      "name": "Notify Human Owner",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.3,
+      "position": [2180, 560],
+      "parameters": {
+        "resource": "message",
+        "operation": "post",
+        "channel": "<<OPS_CHANNEL_ID>>",
+        "text": "Agent task needs review: {{ $('Summarize Run').item.json.message.content.reason }}"
+      },
+      "credentials": { "slackApi": { "id": "REPLACE_ME", "name": "Slack Bot" } }
+    },
+    {
+      "id": "respond",
+      "name": "Respond JSON",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [2420, 700],
+      "parameters": { "options": {}, "respondWith": "allIncomingItems" }
+    }
+  ],
+  "connections": {
+    "Task Webhook": { "main": [[{ "node": "Normalize Task", "type": "main", "index": 0 }]] },
+    "Normalize Task": { "main": [[{ "node": "Build Step Plan", "type": "main", "index": 0 }]] },
+    "Build Step Plan": { "main": [[{ "node": "Fan Out Planned Steps", "type": "main", "index": 0 }]] },
+    "Fan Out Planned Steps": { "main": [[{ "node": "Per Step", "type": "main", "index": 0 }]] },
+    "Per Step": { "main": [
+      [{ "node": "Execute Step Agent", "type": "main", "index": 0 }],
+      [{ "node": "Summarize Run", "type": "main", "index": 0 }]
+    ] },
+    "Execute Step Agent": { "main": [[{ "node": "Validate Step Result", "type": "main", "index": 0 }]] },
+    "Validate Step Result": { "main": [[{ "node": "Step Passed?", "type": "main", "index": 0 }]] },
+    "Step Passed?": { "main": [
+      [{ "node": "Checkpoint Passed Step", "type": "main", "index": 0 }],
+      [{ "node": "Repair Failed Step", "type": "main", "index": 0 }]
+    ] },
+    "Repair Failed Step": { "main": [[{ "node": "Checkpoint Repaired Step", "type": "main", "index": 0 }]] },
+    "Checkpoint Passed Step": { "main": [[{ "node": "Per Step", "type": "main", "index": 0 }]] },
+    "Checkpoint Repaired Step": { "main": [[{ "node": "Per Step", "type": "main", "index": 0 }]] },
+    "Summarize Run": { "main": [[{ "node": "Escalation Needed?", "type": "main", "index": 0 }]] },
+    "Escalation Needed?": { "main": [
+      [{ "node": "Notify Human Owner", "type": "main", "index": 0 }],
+      [{ "node": "Respond JSON", "type": "main", "index": 0 }]
+    ] },
+    "Notify Human Owner": { "main": [[{ "node": "Respond JSON", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "pinData": {},
+  "versionId": "20-long-running-agent-supervisor"
+}

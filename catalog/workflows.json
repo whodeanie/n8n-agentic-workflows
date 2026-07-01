@@ -343,5 +343,67 @@
       "webhook"
     ],
     "workflowPath": "18-code-review-assistant/workflow.json"
+  },
+  {
+    "slug": "19-multi-agent-intake-triage",
+    "name": "Multi Agent Intake Triage Council",
+    "nodeCount": 16,
+    "stickyNoteCount": 2,
+    "triggerTypes": [
+      "webhook"
+    ],
+    "integrationTypes": [
+      "googleSheets",
+      "if",
+      "openAi",
+      "respondToWebhook",
+      "set",
+      "switch",
+      "webhook"
+    ],
+    "workflowPath": "19-multi-agent-intake-triage/workflow.json"
+  },
+  {
+    "slug": "20-long-running-agent-supervisor",
+    "name": "Long Running Agent Task Supervisor",
+    "nodeCount": 17,
+    "stickyNoteCount": 2,
+    "triggerTypes": [
+      "webhook"
+    ],
+    "integrationTypes": [
+      "code",
+      "googleSheets",
+      "if",
+      "openAi",
+      "respondToWebhook",
+      "set",
+      "slack",
+      "splitInBatches",
+      "webhook"
+    ],
+    "workflowPath": "20-long-running-agent-supervisor/workflow.json"
+  },
+  {
+    "slug": "21-memory-backed-account-copilot",
+    "name": "Memory Backed Account Copilot",
+    "nodeCount": 14,
+    "stickyNoteCount": 2,
+    "triggerTypes": [
+      "webhook"
+    ],
+    "integrationTypes": [
+      "@n8n/n8n-nodes-langchain.agent",
+      "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "@n8n/n8n-nodes-langchain.memoryBufferWindow",
+      "@n8n/n8n-nodes-langchain.outputParserStructured",
+      "@n8n/n8n-nodes-langchain.toolCalculator",
+      "googleSheets",
+      "if",
+      "respondToWebhook",
+      "set",
+      "webhook"
+    ],
+    "workflowPath": "21-memory-backed-account-copilot/workflow.json"
   }
 ]

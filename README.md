@@ -33,6 +33,9 @@ Built by Kerry Dean Jr. as a portfolio-grade workflow library, not a sales bundl
 | 16 | Multi Step Research Agent With Self Correction | Query decomposition, parallel retrieval, judging, and refinement. |
 | 17 | Tool Using Agent With Function Calling | Planner loop, tool router, durable transcript, and step cap. |
 | 18 | Code Review Assistant For Non Engineers | PR diff review, severity bucketing, and human-readable Slack summary. |
+| 19 | Multi Agent Intake Triage Council | Specialist routing, independent policy review, auto-reply gate, and audit trail. |
+| 20 | Long Running Agent Task Supervisor | Step planning, per-step validation, repair loop, checkpoints, and escalation. |
+| 21 | Memory Backed Account Copilot | Native AI Agent with model, memory, tool, parser, confidence gate, and audit log. |
 
 The generated machine-readable catalog lives at `catalog/workflows.json`.
 
