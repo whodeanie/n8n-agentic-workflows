@@ -26,4 +26,4 @@ Validation should check JSON parseability, required n8n fields, minimum workflow
 
 ## Portfolio Framing
 
-The portfolio should describe the repo as a validated n8n workflow library and avoid implying these are hosted live services. The strongest claims are the measurable ones: twenty-one workflow exports, TypeScript catalog generation, Python test coverage, CI validation, and clear import/setup docs.
+The portfolio should describe the repo as a validated n8n workflow library and avoid implying these are hosted live services. The strongest claims are the measurable ones: twenty-four workflow exports, TypeScript catalog generation, Python test coverage, CI validation, and clear import/setup docs.

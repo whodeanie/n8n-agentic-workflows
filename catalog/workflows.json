@@ -405,5 +405,67 @@
       "webhook"
     ],
     "workflowPath": "21-memory-backed-account-copilot/workflow.json"
+  },
+  {
+    "slug": "22-incident-runbook-agent",
+    "name": "Incident Runbook Agent",
+    "nodeCount": 14,
+    "stickyNoteCount": 2,
+    "triggerTypes": [
+      "webhook"
+    ],
+    "integrationTypes": [
+      "googleSheets",
+      "httpRequest",
+      "openAi",
+      "respondToWebhook",
+      "set",
+      "slack",
+      "switch",
+      "webhook"
+    ],
+    "workflowPath": "22-incident-runbook-agent/workflow.json"
+  },
+  {
+    "slug": "23-human-approval-tool-agent",
+    "name": "Human Approval Tool Agent",
+    "nodeCount": 13,
+    "stickyNoteCount": 2,
+    "triggerTypes": [
+      "webhook"
+    ],
+    "integrationTypes": [
+      "googleSheets",
+      "httpRequest",
+      "if",
+      "openAi",
+      "respondToWebhook",
+      "set",
+      "slack",
+      "webhook"
+    ],
+    "workflowPath": "23-human-approval-tool-agent/workflow.json"
+  },
+  {
+    "slug": "24-agent-eval-regression-runner",
+    "name": "Agent Eval Regression Runner",
+    "nodeCount": 14,
+    "stickyNoteCount": 2,
+    "triggerTypes": [
+      "scheduleTrigger"
+    ],
+    "integrationTypes": [
+      "code",
+      "googleSheets",
+      "httpRequest",
+      "if",
+      "openAi",
+      "respondToWebhook",
+      "scheduleTrigger",
+      "set",
+      "slack",
+      "splitInBatches"
+    ],
+    "workflowPath": "24-agent-eval-regression-runner/workflow.json"
   }
 ]

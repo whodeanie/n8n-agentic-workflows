@@ -1,0 +1,220 @@
+{
+  "name": "Human Approval Tool Agent",
+  "nodes": [
+    {
+      "id": "sticky-overview",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [80, 60],
+      "parameters": {
+        "content": "## Human Approval Tool Agent\n\nPlans a tool call, scores the risk, executes low-risk actions through an approved gateway, and sends medium/high-risk actions to a human approval queue.",
+        "height": 260,
+        "width": 430,
+        "color": 4
+      }
+    },
+    {
+      "id": "sticky-approval",
+      "name": "Approval Notes",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [80, 340],
+      "parameters": {
+        "content": "## Approval design\n\n. The model produces a tool intent, not direct execution.\n. Risk Score owns the approval decision.\n. Approved tool execution goes through a single internal gateway.\n. Human queue receives the proposed action, arguments, risk, and rationale.",
+        "height": 280,
+        "width": 430,
+        "color": 5
+      }
+    },
+    {
+      "id": "trig-action",
+      "name": "Action Request",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [260, 320],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "approval-tool-agent",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "webhookId": "REPLACE_ME"
+    },
+    {
+      "id": "normalize",
+      "name": "Normalize Action Request",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3,
+      "position": [500, 320],
+      "parameters": {
+        "assignments": { "assignments": [
+          { "id": "n0", "name": "request_id", "value": "={{ $json.body?.request_id ?? $json.request_id ?? $execution.id }}", "type": "string" },
+          { "id": "n1", "name": "actor", "value": "={{ $json.body?.actor ?? $json.actor ?? 'unknown' }}", "type": "string" },
+          { "id": "n2", "name": "goal", "value": "={{ $json.body?.goal ?? $json.goal ?? '' }}", "type": "string" },
+          { "id": "n3", "name": "allowed_tools", "value": "={{ $json.body?.allowed_tools ?? ['lookup_account','create_task','send_followup'] }}", "type": "array" }
+        ] },
+        "options": {}
+      }
+    },
+    {
+      "id": "plan",
+      "name": "Plan Tool Intent",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [740, 320],
+      "parameters": {
+        "resource": "chat",
+        "model": "gpt-4o",
+        "messages": {
+          "values": [
+            { "role": "system", "content": "Choose at most one allowed tool. Do not create arguments that were not provided or safely inferable." },
+            { "role": "user", "content": "Goal: {{ $json.goal }}\nAllowed tools: {{ JSON.stringify($json.allowed_tools) }}\n\nJSON: { tool_name, arguments, rationale, needs_write: boolean }" }
+          ]
+        },
+        "jsonOutput": true,
+        "options": { "temperature": 0.1 }
+      },
+      "credentials": { "openAiApi": { "id": "REPLACE_ME", "name": "OpenAI account" } }
+    },
+    {
+      "id": "risk",
+      "name": "Score Tool Risk",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [980, 320],
+      "parameters": {
+        "resource": "chat",
+        "model": "gpt-4o-mini",
+        "messages": {
+          "values": [
+            { "role": "system", "content": "Score tool-call risk. Low can auto-execute. Medium or high requires approval. Return JSON only." },
+            { "role": "user", "content": "Actor: {{ $('Normalize Action Request').item.json.actor }}\nGoal: {{ $('Normalize Action Request').item.json.goal }}\nTool intent: {{ JSON.stringify($('Plan Tool Intent').item.json.message.content) }}\n\nJSON: { risk: low|medium|high, approval_required: boolean, reason }" }
+          ]
+        },
+        "jsonOutput": true,
+        "options": { "temperature": 0.1 }
+      },
+      "credentials": { "openAiApi": { "id": "REPLACE_ME", "name": "OpenAI account" } }
+    },
+    {
+      "id": "approval-gate",
+      "name": "Approval Required?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1220, 320],
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            { "leftValue": "={{ $json.message.content.approval_required }}", "rightValue": true, "operator": { "type": "boolean", "operation": "equal" } }
+          ],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "approval-message",
+      "name": "Request Human Approval",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.3,
+      "position": [1460, 220],
+      "parameters": {
+        "resource": "message",
+        "operation": "post",
+        "channel": "<<APPROVAL_CHANNEL_ID>>",
+        "text": "Approval needed for {{ $('Normalize Action Request').item.json.actor }}: {{ JSON.stringify($('Plan Tool Intent').item.json.message.content) }} Risk: {{ $('Score Tool Risk').item.json.message.content.risk }} Reason: {{ $('Score Tool Risk').item.json.message.content.reason }}"
+      },
+      "credentials": { "slackApi": { "id": "REPLACE_ME", "name": "Slack Bot" } }
+    },
+    {
+      "id": "execute",
+      "name": "Execute Approved Tool",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1460, 420],
+      "parameters": {
+        "method": "POST",
+        "url": "https://tools.example.com/execute",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ request_id: $('Normalize Action Request').item.json.request_id, tool: $('Plan Tool Intent').item.json.message.content.tool_name, arguments: $('Plan Tool Intent').item.json.message.content.arguments }) }}",
+        "options": {}
+      },
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 1500,
+      "notes": "Replace with a constrained internal tool gateway. Do not point this directly at unrelated production APIs."
+    },
+    {
+      "id": "approval-record",
+      "name": "Record Approval Queue",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3,
+      "position": [1700, 220],
+      "parameters": {
+        "assignments": { "assignments": [
+          { "id": "q0", "name": "decision", "value": "queued_for_approval", "type": "string" },
+          { "id": "q1", "name": "request_id", "value": "={{ $('Normalize Action Request').item.json.request_id }}", "type": "string" },
+          { "id": "q2", "name": "risk", "value": "={{ $('Score Tool Risk').item.json.message.content.risk }}", "type": "string" }
+        ] },
+        "options": {}
+      }
+    },
+    {
+      "id": "execution-record",
+      "name": "Record Tool Execution",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3,
+      "position": [1700, 420],
+      "parameters": {
+        "assignments": { "assignments": [
+          { "id": "x0", "name": "decision", "value": "executed", "type": "string" },
+          { "id": "x1", "name": "request_id", "value": "={{ $('Normalize Action Request').item.json.request_id }}", "type": "string" },
+          { "id": "x2", "name": "tool_response", "value": "={{ JSON.stringify($json) }}", "type": "string" }
+        ] },
+        "options": {}
+      }
+    },
+    {
+      "id": "audit",
+      "name": "Audit Tool Decision",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [1940, 320],
+      "parameters": {
+        "operation": "append",
+        "documentId": { "__rl": true, "value": "<<YOUR_AUDIT_SHEET_ID>>", "mode": "id" },
+        "sheetName": { "__rl": true, "value": "ToolApprovalAudit", "mode": "name" },
+        "columns": { "mappingMode": "defineBelow", "value": { "ts": "={{ $now.toISO() }}", "request_id": "={{ $('Normalize Action Request').item.json.request_id }}", "decision": "={{ $json.decision }}", "context": "={{ JSON.stringify($json) }}" } }
+      },
+      "credentials": { "googleSheetsOAuth2Api": { "id": "REPLACE_ME", "name": "Google Sheets" } }
+    },
+    {
+      "id": "respond",
+      "name": "Respond JSON",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [2180, 320],
+      "parameters": { "options": {}, "respondWith": "allIncomingItems" }
+    }
+  ],
+  "connections": {
+    "Action Request": { "main": [[{ "node": "Normalize Action Request", "type": "main", "index": 0 }]] },
+    "Normalize Action Request": { "main": [[{ "node": "Plan Tool Intent", "type": "main", "index": 0 }]] },
+    "Plan Tool Intent": { "main": [[{ "node": "Score Tool Risk", "type": "main", "index": 0 }]] },
+    "Score Tool Risk": { "main": [[{ "node": "Approval Required?", "type": "main", "index": 0 }]] },
+    "Approval Required?": { "main": [
+      [{ "node": "Request Human Approval", "type": "main", "index": 0 }],
+      [{ "node": "Execute Approved Tool", "type": "main", "index": 0 }]
+    ] },
+    "Request Human Approval": { "main": [[{ "node": "Record Approval Queue", "type": "main", "index": 0 }]] },
+    "Execute Approved Tool": { "main": [[{ "node": "Record Tool Execution", "type": "main", "index": 0 }]] },
+    "Record Approval Queue": { "main": [[{ "node": "Audit Tool Decision", "type": "main", "index": 0 }]] },
+    "Record Tool Execution": { "main": [[{ "node": "Audit Tool Decision", "type": "main", "index": 0 }]] },
+    "Audit Tool Decision": { "main": [[{ "node": "Respond JSON", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "pinData": {},
+  "versionId": "23-human-approval-tool-agent"
+}

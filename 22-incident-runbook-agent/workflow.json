@@ -1,0 +1,241 @@
+{
+  "name": "Incident Runbook Agent",
+  "nodes": [
+    {
+      "id": "sticky-overview",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [80, 60],
+      "parameters": {
+        "content": "## Incident Runbook Agent\n\nTakes an alert, classifies severity, retrieves the matching runbook, drafts a response plan, and routes the plan through a safety gate before notifying an owner.",
+        "height": 260,
+        "width": 430,
+        "color": 4
+      }
+    },
+    {
+      "id": "sticky-safety",
+      "name": "Safety Notes",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [80, 340],
+      "parameters": {
+        "content": "## Safety posture\n\n. The workflow recommends, it does not execute production changes.\n. Safety Review is separate from Response Plan.\n. Critical incidents notify the owner with context.\n. Audit rows keep classification, runbook, plan, and route decision together.",
+        "height": 280,
+        "width": 430,
+        "color": 6
+      }
+    },
+    {
+      "id": "trig-alert",
+      "name": "Alert Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [260, 320],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "incident-runbook-agent",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "webhookId": "REPLACE_ME"
+    },
+    {
+      "id": "normalize",
+      "name": "Normalize Alert",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3,
+      "position": [500, 320],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            { "id": "n0", "name": "alert_id", "value": "={{ $json.body?.alert_id ?? $json.alert_id ?? $execution.id }}", "type": "string" },
+            { "id": "n1", "name": "service", "value": "={{ $json.body?.service ?? $json.service ?? 'unknown-service' }}", "type": "string" },
+            { "id": "n2", "name": "signal", "value": "={{ $json.body?.signal ?? $json.signal ?? '' }}", "type": "string" },
+            { "id": "n3", "name": "impact", "value": "={{ $json.body?.impact ?? $json.impact ?? 'unknown' }}", "type": "string" },
+            { "id": "n4", "name": "received_at", "value": "={{ $now.toISO() }}", "type": "string" }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "classify",
+      "name": "Classify Severity",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [740, 320],
+      "parameters": {
+        "resource": "chat",
+        "model": "gpt-4o-mini",
+        "messages": {
+          "values": [
+            { "role": "system", "content": "Classify incident severity from p1 to p4. Return JSON only." },
+            { "role": "user", "content": "Service: {{ $json.service }}\nSignal: {{ $json.signal }}\nImpact: {{ $json.impact }}\n\nJSON: { severity: p1|p2|p3|p4, confidence: 0..1, affected_area, rationale }" }
+          ]
+        },
+        "jsonOutput": true,
+        "options": { "temperature": 0.1 }
+      },
+      "credentials": { "openAiApi": { "id": "REPLACE_ME", "name": "OpenAI account" } }
+    },
+    {
+      "id": "fetch-runbook",
+      "name": "Fetch Runbook",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [980, 320],
+      "parameters": {
+        "method": "GET",
+        "url": "https://runbooks.example.com/search?service={{ $('Normalize Alert').item.json.service }}&severity={{ $('Classify Severity').item.json.message.content.severity }}",
+        "options": {}
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1500,
+      "notes": "Replace with your docs, Notion, Confluence, or internal runbook retrieval endpoint."
+    },
+    {
+      "id": "plan",
+      "name": "Draft Response Plan",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [1220, 320],
+      "parameters": {
+        "resource": "chat",
+        "model": "gpt-4o",
+        "messages": {
+          "values": [
+            { "role": "system", "content": "Draft a response plan grounded in the runbook. Do not tell the system to execute destructive changes automatically." },
+            { "role": "user", "content": "Alert: {{ JSON.stringify($('Normalize Alert').item.json) }}\nSeverity: {{ JSON.stringify($('Classify Severity').item.json.message.content) }}\nRunbook: {{ JSON.stringify($json) }}\n\nJSON: { summary, recommended_steps: [string], owner_message, risk_notes: [string], confidence: 0..1 }" }
+          ]
+        },
+        "jsonOutput": true,
+        "options": { "temperature": 0.2 }
+      },
+      "credentials": { "openAiApi": { "id": "REPLACE_ME", "name": "OpenAI account" } }
+    },
+    {
+      "id": "safety",
+      "name": "Safety Review",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [1460, 320],
+      "parameters": {
+        "resource": "chat",
+        "model": "gpt-4o",
+        "messages": {
+          "values": [
+            { "role": "system", "content": "Review the response plan for operational risk. Route as inform, approval_required, or page_owner." },
+            { "role": "user", "content": "Severity: {{ $('Classify Severity').item.json.message.content.severity }}\nPlan: {{ JSON.stringify($('Draft Response Plan').item.json.message.content) }}\n\nJSON: { route: inform|approval_required|page_owner, reason, safe_summary }" }
+          ]
+        },
+        "jsonOutput": true,
+        "options": { "temperature": 0.1 }
+      },
+      "credentials": { "openAiApi": { "id": "REPLACE_ME", "name": "OpenAI account" } }
+    },
+    {
+      "id": "route",
+      "name": "Route Incident",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [1700, 320],
+      "parameters": {
+        "rules": {
+          "values": [
+            { "outputKey": "inform", "conditions": { "conditions": [{ "leftValue": "={{ $json.message.content.route }}", "rightValue": "inform", "operator": { "type": "string", "operation": "equals" } }], "combinator": "and" } },
+            { "outputKey": "approval", "conditions": { "conditions": [{ "leftValue": "={{ $json.message.content.route }}", "rightValue": "approval_required", "operator": { "type": "string", "operation": "equals" } }], "combinator": "and" } }
+          ]
+        },
+        "options": { "fallbackOutput": "extra", "renameFallbackOutput": "page_owner" }
+      }
+    },
+    {
+      "id": "inform",
+      "name": "Prepare Informational Update",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3,
+      "position": [1940, 160],
+      "parameters": {
+        "assignments": { "assignments": [
+          { "id": "i0", "name": "decision", "value": "inform", "type": "string" },
+          { "id": "i1", "name": "message", "value": "={{ $('Safety Review').item.json.message.content.safe_summary }}", "type": "string" }
+        ] },
+        "options": {}
+      }
+    },
+    {
+      "id": "approval",
+      "name": "Prepare Approval Request",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3,
+      "position": [1940, 320],
+      "parameters": {
+        "assignments": { "assignments": [
+          { "id": "a0", "name": "decision", "value": "approval_required", "type": "string" },
+          { "id": "a1", "name": "message", "value": "={{ $('Draft Response Plan').item.json.message.content.owner_message }}", "type": "string" },
+          { "id": "a2", "name": "reason", "value": "={{ $('Safety Review').item.json.message.content.reason }}", "type": "string" }
+        ] },
+        "options": {}
+      }
+    },
+    {
+      "id": "page",
+      "name": "Page Incident Owner",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.3,
+      "position": [1940, 500],
+      "parameters": {
+        "resource": "message",
+        "operation": "post",
+        "channel": "<<INCIDENT_CHANNEL_ID>>",
+        "text": "Incident needs owner review: {{ $('Safety Review').item.json.message.content.safe_summary }}"
+      },
+      "credentials": { "slackApi": { "id": "REPLACE_ME", "name": "Slack Bot" } }
+    },
+    {
+      "id": "audit",
+      "name": "Audit Incident",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [2180, 320],
+      "parameters": {
+        "operation": "append",
+        "documentId": { "__rl": true, "value": "<<YOUR_AUDIT_SHEET_ID>>", "mode": "id" },
+        "sheetName": { "__rl": true, "value": "IncidentAudit", "mode": "name" },
+        "columns": { "mappingMode": "defineBelow", "value": { "ts": "={{ $now.toISO() }}", "alert_id": "={{ $('Normalize Alert').item.json.alert_id }}", "severity": "={{ $('Classify Severity').item.json.message.content.severity }}", "route": "={{ $('Safety Review').item.json.message.content.route }}", "context": "={{ JSON.stringify($json) }}" } }
+      },
+      "credentials": { "googleSheetsOAuth2Api": { "id": "REPLACE_ME", "name": "Google Sheets" } }
+    },
+    {
+      "id": "respond",
+      "name": "Respond JSON",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [2420, 320],
+      "parameters": { "options": {}, "respondWith": "allIncomingItems" }
+    }
+  ],
+  "connections": {
+    "Alert Webhook": { "main": [[{ "node": "Normalize Alert", "type": "main", "index": 0 }]] },
+    "Normalize Alert": { "main": [[{ "node": "Classify Severity", "type": "main", "index": 0 }]] },
+    "Classify Severity": { "main": [[{ "node": "Fetch Runbook", "type": "main", "index": 0 }]] },
+    "Fetch Runbook": { "main": [[{ "node": "Draft Response Plan", "type": "main", "index": 0 }]] },
+    "Draft Response Plan": { "main": [[{ "node": "Safety Review", "type": "main", "index": 0 }]] },
+    "Safety Review": { "main": [[{ "node": "Route Incident", "type": "main", "index": 0 }]] },
+    "Route Incident": { "main": [
+      [{ "node": "Prepare Informational Update", "type": "main", "index": 0 }],
+      [{ "node": "Prepare Approval Request", "type": "main", "index": 0 }],
+      [{ "node": "Page Incident Owner", "type": "main", "index": 0 }]
+    ] },
+    "Prepare Informational Update": { "main": [[{ "node": "Audit Incident", "type": "main", "index": 0 }]] },
+    "Prepare Approval Request": { "main": [[{ "node": "Audit Incident", "type": "main", "index": 0 }]] },
+    "Page Incident Owner": { "main": [[{ "node": "Audit Incident", "type": "main", "index": 0 }]] },
+    "Audit Incident": { "main": [[{ "node": "Respond JSON", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "pinData": {},
+  "versionId": "22-incident-runbook-agent"
+}

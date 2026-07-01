@@ -1,0 +1,210 @@
+{
+  "name": "Agent Eval Regression Runner",
+  "nodes": [
+    {
+      "id": "sticky-overview",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [80, 60],
+      "parameters": {
+        "content": "## Agent Eval Regression Runner\n\nRuns scheduled eval cases against a candidate agent, judges each response independently, aggregates pass rate, and alerts when the release gate fails.",
+        "height": 260,
+        "width": 430,
+        "color": 4
+      }
+    },
+    {
+      "id": "sticky-gate",
+      "name": "Release Gate Notes",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [80, 340],
+      "parameters": {
+        "content": "## Eval design\n\n. Candidate and judge are separate.\n. Test cases are loaded from a fixture endpoint or sheet.\n. Aggregate gate fails below threshold.\n. Regression alerts include failing case IDs and judge reasons.",
+        "height": 280,
+        "width": 430,
+        "color": 6
+      }
+    },
+    {
+      "id": "schedule",
+      "name": "Nightly Eval Schedule",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [260, 320],
+      "parameters": {
+        "rule": { "interval": [{ "field": "hours", "hoursInterval": 24 }] }
+      }
+    },
+    {
+      "id": "fetch-cases",
+      "name": "Fetch Eval Cases",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [500, 320],
+      "parameters": {
+        "method": "GET",
+        "url": "https://evals.example.com/agent-cases",
+        "options": {}
+      },
+      "notes": "Replace with a Google Sheet, Airtable table, GitHub raw fixture, or internal eval-case API."
+    },
+    {
+      "id": "expand",
+      "name": "Expand Cases",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [740, 320],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const cases = Array.isArray($json.cases) ? $json.cases : ($json.data ?? []);\nreturn cases.map((testCase, index) => ({ json: { case_id: testCase.case_id ?? `case-${index + 1}`, input: testCase.input, expected: testCase.expected, rubric: testCase.rubric ?? 'Answer must be grounded, complete, and safe.' } }));"
+      }
+    },
+    {
+      "id": "split",
+      "name": "Per Eval Case",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [980, 320],
+      "parameters": { "batchSize": 1, "options": {} }
+    },
+    {
+      "id": "candidate",
+      "name": "Run Candidate Agent",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1220, 240],
+      "parameters": {
+        "method": "POST",
+        "url": "https://candidate-agent.example.com/run",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ case_id: $json.case_id, input: $json.input }) }}",
+        "options": {}
+      },
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 1500
+    },
+    {
+      "id": "judge",
+      "name": "Judge Agent Output",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [1460, 240],
+      "parameters": {
+        "resource": "chat",
+        "model": "gpt-4o",
+        "messages": {
+          "values": [
+            { "role": "system", "content": "You are an eval judge. Score only against the expected answer and rubric. Return JSON only." },
+            { "role": "user", "content": "Case: {{ $('Per Eval Case').item.json.case_id }}\nInput: {{ JSON.stringify($('Per Eval Case').item.json.input) }}\nExpected: {{ JSON.stringify($('Per Eval Case').item.json.expected) }}\nRubric: {{ $('Per Eval Case').item.json.rubric }}\nCandidate output: {{ JSON.stringify($json) }}\n\nJSON: { passed: boolean, score: 0..1, reason, failure_type }" }
+          ]
+        },
+        "jsonOutput": true,
+        "options": { "temperature": 0.1 }
+      },
+      "credentials": { "openAiApi": { "id": "REPLACE_ME", "name": "OpenAI account" } }
+    },
+    {
+      "id": "record-case",
+      "name": "Record Case Result",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [1700, 240],
+      "parameters": {
+        "operation": "append",
+        "documentId": { "__rl": true, "value": "<<YOUR_EVAL_SHEET_ID>>", "mode": "id" },
+        "sheetName": { "__rl": true, "value": "EvalRuns", "mode": "name" },
+        "columns": { "mappingMode": "defineBelow", "value": { "ts": "={{ $now.toISO() }}", "case_id": "={{ $('Per Eval Case').item.json.case_id }}", "passed": "={{ $('Judge Agent Output').item.json.message.content.passed }}", "score": "={{ $('Judge Agent Output').item.json.message.content.score }}", "reason": "={{ $('Judge Agent Output').item.json.message.content.reason }}" } }
+      },
+      "credentials": { "googleSheetsOAuth2Api": { "id": "REPLACE_ME", "name": "Google Sheets" } }
+    },
+    {
+      "id": "aggregate",
+      "name": "Aggregate Eval Results",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1220, 560],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const items = $input.all().map((item) => item.json);\nconst total = items.length;\nconst passed = items.filter((item) => item.passed === true || item.passed === 'true').length;\nconst pass_rate = total === 0 ? 0 : passed / total;\nconst failures = items.filter((item) => !(item.passed === true || item.passed === 'true')).map((item) => item.case_id);\nreturn [{ json: { total, passed, pass_rate, failures, threshold: 0.9 } }];"
+      }
+    },
+    {
+      "id": "gate",
+      "name": "Release Gate Passed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1460, 560],
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            { "leftValue": "={{ $json.pass_rate >= $json.threshold }}", "rightValue": true, "operator": { "type": "boolean", "operation": "equal" } }
+          ],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "pass",
+      "name": "Record Passing Gate",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3,
+      "position": [1700, 460],
+      "parameters": {
+        "assignments": { "assignments": [
+          { "id": "p0", "name": "status", "value": "passed", "type": "string" },
+          { "id": "p1", "name": "summary", "value": "={{ `Eval gate passed with ${$json.pass_rate}` }}", "type": "string" }
+        ] },
+        "options": {}
+      }
+    },
+    {
+      "id": "alert",
+      "name": "Notify Regression",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.3,
+      "position": [1700, 660],
+      "parameters": {
+        "resource": "message",
+        "operation": "post",
+        "channel": "<<EVAL_ALERT_CHANNEL_ID>>",
+        "text": "Agent eval regression: pass rate {{ $json.pass_rate }} below threshold {{ $json.threshold }}. Failures: {{ JSON.stringify($json.failures) }}"
+      },
+      "credentials": { "slackApi": { "id": "REPLACE_ME", "name": "Slack Bot" } }
+    },
+    {
+      "id": "respond",
+      "name": "Respond Summary",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1940, 560],
+      "parameters": { "options": {}, "respondWith": "allIncomingItems" }
+    }
+  ],
+  "connections": {
+    "Nightly Eval Schedule": { "main": [[{ "node": "Fetch Eval Cases", "type": "main", "index": 0 }]] },
+    "Fetch Eval Cases": { "main": [[{ "node": "Expand Cases", "type": "main", "index": 0 }]] },
+    "Expand Cases": { "main": [[{ "node": "Per Eval Case", "type": "main", "index": 0 }]] },
+    "Per Eval Case": { "main": [
+      [{ "node": "Run Candidate Agent", "type": "main", "index": 0 }],
+      [{ "node": "Aggregate Eval Results", "type": "main", "index": 0 }]
+    ] },
+    "Run Candidate Agent": { "main": [[{ "node": "Judge Agent Output", "type": "main", "index": 0 }]] },
+    "Judge Agent Output": { "main": [[{ "node": "Record Case Result", "type": "main", "index": 0 }]] },
+    "Record Case Result": { "main": [[{ "node": "Per Eval Case", "type": "main", "index": 0 }]] },
+    "Aggregate Eval Results": { "main": [[{ "node": "Release Gate Passed?", "type": "main", "index": 0 }]] },
+    "Release Gate Passed?": { "main": [
+      [{ "node": "Record Passing Gate", "type": "main", "index": 0 }],
+      [{ "node": "Notify Regression", "type": "main", "index": 0 }]
+    ] },
+    "Record Passing Gate": { "main": [[{ "node": "Respond Summary", "type": "main", "index": 0 }]] },
+    "Notify Regression": { "main": [[{ "node": "Respond Summary", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "pinData": {},
+  "versionId": "24-agent-eval-regression-runner"
+}

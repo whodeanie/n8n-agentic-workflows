@@ -36,6 +36,9 @@ Built by Kerry Dean Jr. as a portfolio-grade workflow library, not a sales bundl
 | 19 | Multi Agent Intake Triage Council | Specialist routing, independent policy review, auto-reply gate, and audit trail. |
 | 20 | Long Running Agent Task Supervisor | Step planning, per-step validation, repair loop, checkpoints, and escalation. |
 | 21 | Memory Backed Account Copilot | Native AI Agent with model, memory, tool, parser, confidence gate, and audit log. |
+| 22 | Incident Runbook Agent | Alert classification, runbook retrieval, safety review, owner routing, and audit. |
+| 23 | Human Approval Tool Agent | Tool intent planning, risk scoring, approval routing, safe execution, and audit. |
+| 24 | Agent Eval Regression Runner | Scheduled eval cases, independent judging, pass-rate gate, and regression alerts. |
 
 The generated machine-readable catalog lives at `catalog/workflows.json`.
 

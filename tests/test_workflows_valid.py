@@ -76,5 +76,15 @@ def test_workflow_connections_reference_existing_node_names(workflow_path: Path)
                 assert target_name in node_names, f"Connection to unknown node: {target_name}"
 
 
+@pytest.mark.parametrize("workflow_path", get_workflows(), ids=lambda path: path.parent.name)
+def test_workflow_has_readme_with_operational_sections(workflow_path: Path) -> None:
+    readme_path = workflow_path.parent / "README.md"
+    assert readme_path.exists(), "Each workflow folder must include README.md setup notes"
+
+    readme = readme_path.read_text()
+    for section in ("## Pattern", "## Flow", "## Setup Notes", "## Validation Focus"):
+      assert section in readme, f"README must include {section}"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
