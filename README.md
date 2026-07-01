@@ -39,6 +39,9 @@ Built by Kerry Dean Jr. as a portfolio-grade workflow library, not a sales bundl
 | 22 | Incident Runbook Agent | Alert classification, runbook retrieval, safety review, owner routing, and audit. |
 | 23 | Human Approval Tool Agent | Tool intent planning, risk scoring, approval routing, safe execution, and audit. |
 | 24 | Agent Eval Regression Runner | Scheduled eval cases, independent judging, pass-rate gate, and regression alerts. |
+| 25 | Vendor Risk Procurement Agent | Procurement intake, vendor policy review, budget check, approval routing, and audit. |
+| 26 | Data Quality Repair Agent | Scheduled anomaly ingestion, structured repair patches, confidence gates, and quarantine. |
+| 27 | Revenue Pipeline Coach | Deal scoring, next-best-action coaching, CRM tasks, risk alerts, and leadership digest. |
 
 The generated machine-readable catalog lives at `catalog/workflows.json`.
 

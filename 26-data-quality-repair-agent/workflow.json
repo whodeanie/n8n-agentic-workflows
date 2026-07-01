@@ -1,0 +1,191 @@
+{
+  "name": "Data Quality Repair Agent",
+  "nodes": [
+    {
+      "id": "sticky-overview",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [80, 60],
+      "parameters": {
+        "content": "## Data Quality Repair Agent\n\nFinds bad records, asks an agent for a structured repair, applies only high-confidence patches, and quarantines questionable changes.",
+        "height": 250,
+        "width": 430,
+        "color": 4
+      }
+    },
+    {
+      "id": "sticky-safety",
+      "name": "Safety Notes",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [80, 330],
+      "parameters": {
+        "content": "## Data mutation safety\n\n. Never patch raw LLM text.\n. Require a structured patch object.\n. Gate on confidence and allowed fields.\n. Quarantine anything ambiguous.",
+        "height": 270,
+        "width": 430,
+        "color": 6
+      }
+    },
+    {
+      "id": "schedule",
+      "name": "Data Quality Schedule",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [280, 320],
+      "parameters": {
+        "rule": { "interval": [{ "field": "hours", "hoursInterval": 6 }] }
+      }
+    },
+    {
+      "id": "fetch",
+      "name": "Fetch Anomaly Records",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [520, 320],
+      "parameters": {
+        "method": "GET",
+        "url": "https://data-quality.example.com/anomalies?limit=100",
+        "options": {}
+      }
+    },
+    {
+      "id": "expand",
+      "name": "Expand Anomalies",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [760, 320],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const records = Array.isArray($json.records) ? $json.records : ($json.data ?? []);\nreturn records.map((record, index) => ({ json: {\n  record_id: record.record_id ?? record.id ?? `record-${index + 1}`,\n  source: record.source ?? 'unknown',\n  field_errors: record.field_errors ?? [],\n  current_record: record.current_record ?? record,\n  allowed_fields: record.allowed_fields ?? ['email', 'phone', 'company', 'title', 'status']\n} }));"
+      }
+    },
+    {
+      "id": "split",
+      "name": "Per Dirty Record",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [1000, 320],
+      "parameters": { "batchSize": 1, "options": {} }
+    },
+    {
+      "id": "agent",
+      "name": "Generate Repair Patch",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [1240, 240],
+      "parameters": {
+        "resource": "chat",
+        "model": "gpt-4o",
+        "messages": {
+          "values": [
+            { "role": "system", "content": "You repair dirty business records. Return JSON only: { confidence: 0..1, patch: object, reason: string, requires_review: boolean }. Only include allowed fields in patch." },
+            { "role": "user", "content": "Allowed fields: {{ JSON.stringify($json.allowed_fields) }}\nField errors: {{ JSON.stringify($json.field_errors) }}\nCurrent record: {{ JSON.stringify($json.current_record) }}" }
+          ]
+        },
+        "jsonOutput": true,
+        "options": { "temperature": 0.05 }
+      },
+      "credentials": { "openAiApi": { "id": "REPLACE_ME", "name": "OpenAI account" } }
+    },
+    {
+      "id": "validate",
+      "name": "Validate Patch Shape",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1480, 240],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const proposal = $json.message?.content ?? $json;\nconst source = $('Per Dirty Record').item.json;\nconst allowed = new Set(source.allowed_fields ?? []);\nconst patch = proposal.patch && typeof proposal.patch === 'object' ? proposal.patch : {};\nconst blockedFields = Object.keys(patch).filter((field) => !allowed.has(field));\nconst is_valid = blockedFields.length === 0 && Object.keys(patch).length > 0;\nreturn [{ json: { ...source, proposal, patch, blockedFields, is_valid, confidence: Number(proposal.confidence ?? 0) } }];"
+      }
+    },
+    {
+      "id": "gate",
+      "name": "Safe To Patch?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1720, 240],
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            { "leftValue": "={{ $json.is_valid && $json.confidence >= 0.86 && $json.proposal.requires_review !== true }}", "rightValue": true, "operator": { "type": "boolean", "operation": "equal" } }
+          ],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "patch",
+      "name": "Apply Record Patch",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1960, 140],
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ `https://data-quality.example.com/records/${$json.record_id}` }}",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ patch: $json.patch, reason: $json.proposal.reason }) }}",
+        "options": {}
+      },
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 1500
+    },
+    {
+      "id": "quarantine",
+      "name": "Quarantine For Review",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.3,
+      "position": [1960, 360],
+      "parameters": {
+        "resource": "message",
+        "operation": "post",
+        "channel": "<<DATA_QUALITY_REVIEW_CHANNEL_ID>>",
+        "text": "Data quality record needs review: {{ $json.record_id }}. Confidence: {{ $json.confidence }}. Blocked fields: {{ JSON.stringify($json.blockedFields) }}. Reason: {{ $json.proposal.reason }}"
+      },
+      "credentials": { "slackApi": { "id": "REPLACE_ME", "name": "Slack Bot" } }
+    },
+    {
+      "id": "audit",
+      "name": "Write Repair Audit",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [2200, 240],
+      "parameters": {
+        "operation": "append",
+        "documentId": { "__rl": true, "value": "<<DATA_QUALITY_SHEET_ID>>", "mode": "id" },
+        "sheetName": { "__rl": true, "value": "RepairAudit", "mode": "name" },
+        "columns": { "mappingMode": "defineBelow", "value": { "ts": "={{ $now.toISO() }}", "record_id": "={{ $('Per Dirty Record').item.json.record_id }}", "confidence": "={{ $('Validate Patch Shape').item.json.confidence }}", "status": "={{ $json.ok ? 'patched' : 'quarantined' }}", "patch": "={{ JSON.stringify($('Validate Patch Shape').item.json.patch) }}" } }
+      },
+      "credentials": { "googleSheetsOAuth2Api": { "id": "REPLACE_ME", "name": "Google Sheets" } }
+    },
+    {
+      "id": "summary",
+      "name": "Build Repair Summary",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1240, 560],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const items = $input.all().map((item) => item.json);\nreturn [{ json: { processed: items.length, completed_at: new Date().toISOString(), note: 'Review audit sheet for patched and quarantined records.' } }];"
+      }
+    }
+  ],
+  "connections": {
+    "Data Quality Schedule": { "main": [[{ "node": "Fetch Anomaly Records", "type": "main", "index": 0 }]] },
+    "Fetch Anomaly Records": { "main": [[{ "node": "Expand Anomalies", "type": "main", "index": 0 }]] },
+    "Expand Anomalies": { "main": [[{ "node": "Per Dirty Record", "type": "main", "index": 0 }]] },
+    "Per Dirty Record": { "main": [[{ "node": "Generate Repair Patch", "type": "main", "index": 0 }], [{ "node": "Build Repair Summary", "type": "main", "index": 0 }]] },
+    "Generate Repair Patch": { "main": [[{ "node": "Validate Patch Shape", "type": "main", "index": 0 }]] },
+    "Validate Patch Shape": { "main": [[{ "node": "Safe To Patch?", "type": "main", "index": 0 }]] },
+    "Safe To Patch?": { "main": [[{ "node": "Apply Record Patch", "type": "main", "index": 0 }], [{ "node": "Quarantine For Review", "type": "main", "index": 0 }]] },
+    "Apply Record Patch": { "main": [[{ "node": "Write Repair Audit", "type": "main", "index": 0 }]] },
+    "Quarantine For Review": { "main": [[{ "node": "Write Repair Audit", "type": "main", "index": 0 }]] },
+    "Write Repair Audit": { "main": [[{ "node": "Per Dirty Record", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "pinData": {},
+  "versionId": "26-data-quality-repair-agent"
+}

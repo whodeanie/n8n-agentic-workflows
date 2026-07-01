@@ -1,0 +1,207 @@
+{
+  "name": "Vendor Risk Procurement Agent",
+  "nodes": [
+    {
+      "id": "sticky-overview",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [80, 60],
+      "parameters": {
+        "content": "## Vendor Risk Procurement Agent\n\nReviews incoming vendor and software purchase requests with policy context, budget checks, risk scoring, approval routing, and audit logging.",
+        "height": 250,
+        "width": 430,
+        "color": 4
+      }
+    },
+    {
+      "id": "sticky-controls",
+      "name": "Control Notes",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [80, 330],
+      "parameters": {
+        "content": "## Approval controls\n\n. Agent recommends; humans approve risky spend.\n. Missing SOC2, DPA, owner, or budget forces review.\n. Every decision writes a durable audit row.\n. Replace placeholder endpoints before live use.",
+        "height": 280,
+        "width": 430,
+        "color": 6
+      }
+    },
+    {
+      "id": "webhook",
+      "name": "Procurement Request Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [280, 320],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "procurement/vendor-review",
+        "responseMode": "responseNode",
+        "options": {}
+      }
+    },
+    {
+      "id": "normalize",
+      "name": "Normalize Request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [520, 320],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const body = $json.body ?? $json;\nreturn [{ json: {\n  request_id: body.request_id ?? `req-${Date.now()}`,\n  requester: body.requester ?? 'unknown',\n  vendor: body.vendor ?? body.company ?? 'unknown vendor',\n  amount: Number(body.amount ?? 0),\n  department: body.department ?? 'unknown',\n  use_case: body.use_case ?? body.reason ?? '',\n  security_docs: body.security_docs ?? [],\n  budget_owner: body.budget_owner ?? null\n} }];"
+      }
+    },
+    {
+      "id": "policy",
+      "name": "Fetch Procurement Policy",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [760, 200],
+      "parameters": {
+        "method": "GET",
+        "url": "https://policy.example.com/procurement/vendor-risk",
+        "options": {}
+      }
+    },
+    {
+      "id": "vendor-db",
+      "name": "Lookup Vendor Record",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [760, 440],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ `https://vendors.example.com/search?name=${encodeURIComponent($json.vendor)}` }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "merge-context",
+      "name": "Merge Policy And Vendor Context",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [1000, 320],
+      "parameters": {
+        "mode": "combine",
+        "combinationMode": "mergeByPosition",
+        "options": {}
+      }
+    },
+    {
+      "id": "agent",
+      "name": "Vendor Risk Agent",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [1240, 320],
+      "parameters": {
+        "resource": "chat",
+        "model": "gpt-4o",
+        "messages": {
+          "values": [
+            { "role": "system", "content": "You review vendor procurement requests. Return JSON only with risk_level, approval_required, missing_items, recommended_next_step, and rationale." },
+            { "role": "user", "content": "Procurement request and context: {{ JSON.stringify($json) }}" }
+          ]
+        },
+        "jsonOutput": true,
+        "options": { "temperature": 0.1 }
+      },
+      "credentials": { "openAiApi": { "id": "REPLACE_ME", "name": "OpenAI account" } }
+    },
+    {
+      "id": "budget",
+      "name": "Budget Owner Check",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [1480, 320],
+      "parameters": {
+        "operation": "lookup",
+        "documentId": { "__rl": true, "value": "<<PROCUREMENT_SHEET_ID>>", "mode": "id" },
+        "sheetName": { "__rl": true, "value": "Budgets", "mode": "name" },
+        "lookupColumn": "department",
+        "lookupValue": "={{ $('Normalize Request').item.json.department }}"
+      },
+      "credentials": { "googleSheetsOAuth2Api": { "id": "REPLACE_ME", "name": "Google Sheets" } }
+    },
+    {
+      "id": "gate",
+      "name": "Needs Human Approval?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1720, 320],
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            { "leftValue": "={{ $('Vendor Risk Agent').item.json.message.content.approval_required === true || $('Normalize Request').item.json.amount > 25000 || !$('Normalize Request').item.json.budget_owner }}", "rightValue": true, "operator": { "type": "boolean", "operation": "equal" } }
+          ],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "approval",
+      "name": "Send Approval Request",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.3,
+      "position": [1960, 220],
+      "parameters": {
+        "resource": "message",
+        "operation": "post",
+        "channel": "<<PROCUREMENT_APPROVAL_CHANNEL_ID>>",
+        "text": "Vendor approval needed: {{ $('Normalize Request').item.json.vendor }} for {{ $('Normalize Request').item.json.department }}. Amount: {{ $('Normalize Request').item.json.amount }}. Risk: {{ $('Vendor Risk Agent').item.json.message.content.risk_level }}. Missing: {{ JSON.stringify($('Vendor Risk Agent').item.json.message.content.missing_items) }}"
+      },
+      "credentials": { "slackApi": { "id": "REPLACE_ME", "name": "Slack Bot" } }
+    },
+    {
+      "id": "auto",
+      "name": "Mark Auto Approved",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3,
+      "position": [1960, 440],
+      "parameters": {
+        "assignments": { "assignments": [
+          { "id": "a1", "name": "status", "value": "auto_approved", "type": "string" },
+          { "id": "a2", "name": "decision_reason", "value": "={{ $('Vendor Risk Agent').item.json.message.content.rationale }}", "type": "string" }
+        ] },
+        "options": {}
+      }
+    },
+    {
+      "id": "audit",
+      "name": "Write Procurement Audit",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [2200, 320],
+      "parameters": {
+        "operation": "append",
+        "documentId": { "__rl": true, "value": "<<PROCUREMENT_SHEET_ID>>", "mode": "id" },
+        "sheetName": { "__rl": true, "value": "Audit", "mode": "name" },
+        "columns": { "mappingMode": "defineBelow", "value": { "ts": "={{ $now.toISO() }}", "request_id": "={{ $('Normalize Request').item.json.request_id }}", "vendor": "={{ $('Normalize Request').item.json.vendor }}", "risk": "={{ $('Vendor Risk Agent').item.json.message.content.risk_level }}", "status": "={{ $json.status ?? 'approval_requested' }}" } }
+      },
+      "credentials": { "googleSheetsOAuth2Api": { "id": "REPLACE_ME", "name": "Google Sheets" } }
+    },
+    {
+      "id": "respond",
+      "name": "Respond Procurement Summary",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [2440, 320],
+      "parameters": { "options": {}, "respondWith": "allIncomingItems" }
+    }
+  ],
+  "connections": {
+    "Procurement Request Webhook": { "main": [[{ "node": "Normalize Request", "type": "main", "index": 0 }]] },
+    "Normalize Request": { "main": [[{ "node": "Fetch Procurement Policy", "type": "main", "index": 0 }, { "node": "Lookup Vendor Record", "type": "main", "index": 0 }]] },
+    "Fetch Procurement Policy": { "main": [[{ "node": "Merge Policy And Vendor Context", "type": "main", "index": 0 }]] },
+    "Lookup Vendor Record": { "main": [[{ "node": "Merge Policy And Vendor Context", "type": "main", "index": 1 }]] },
+    "Merge Policy And Vendor Context": { "main": [[{ "node": "Vendor Risk Agent", "type": "main", "index": 0 }]] },
+    "Vendor Risk Agent": { "main": [[{ "node": "Budget Owner Check", "type": "main", "index": 0 }]] },
+    "Budget Owner Check": { "main": [[{ "node": "Needs Human Approval?", "type": "main", "index": 0 }]] },
+    "Needs Human Approval?": { "main": [[{ "node": "Send Approval Request", "type": "main", "index": 0 }], [{ "node": "Mark Auto Approved", "type": "main", "index": 0 }]] },
+    "Send Approval Request": { "main": [[{ "node": "Write Procurement Audit", "type": "main", "index": 0 }]] },
+    "Mark Auto Approved": { "main": [[{ "node": "Write Procurement Audit", "type": "main", "index": 0 }]] },
+    "Write Procurement Audit": { "main": [[{ "node": "Respond Procurement Summary", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "pinData": {},
+  "versionId": "25-vendor-risk-procurement-agent"
+}

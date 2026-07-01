@@ -467,5 +467,67 @@
       "splitInBatches"
     ],
     "workflowPath": "24-agent-eval-regression-runner/workflow.json"
+  },
+  {
+    "slug": "25-vendor-risk-procurement-agent",
+    "name": "Vendor Risk Procurement Agent",
+    "nodeCount": 14,
+    "stickyNoteCount": 2,
+    "triggerTypes": [
+      "webhook"
+    ],
+    "integrationTypes": [
+      "code",
+      "googleSheets",
+      "httpRequest",
+      "if",
+      "merge",
+      "openAi",
+      "respondToWebhook",
+      "set",
+      "slack",
+      "webhook"
+    ],
+    "workflowPath": "25-vendor-risk-procurement-agent/workflow.json"
+  },
+  {
+    "slug": "26-data-quality-repair-agent",
+    "name": "Data Quality Repair Agent",
+    "nodeCount": 13,
+    "stickyNoteCount": 2,
+    "triggerTypes": [
+      "scheduleTrigger"
+    ],
+    "integrationTypes": [
+      "code",
+      "googleSheets",
+      "httpRequest",
+      "if",
+      "openAi",
+      "scheduleTrigger",
+      "slack",
+      "splitInBatches"
+    ],
+    "workflowPath": "26-data-quality-repair-agent/workflow.json"
+  },
+  {
+    "slug": "27-revenue-pipeline-coach",
+    "name": "Revenue Pipeline Coach",
+    "nodeCount": 14,
+    "stickyNoteCount": 2,
+    "triggerTypes": [
+      "scheduleTrigger"
+    ],
+    "integrationTypes": [
+      "code",
+      "googleSheets",
+      "hubspot",
+      "openAi",
+      "scheduleTrigger",
+      "slack",
+      "splitInBatches",
+      "switch"
+    ],
+    "workflowPath": "27-revenue-pipeline-coach/workflow.json"
   }
 ]

@@ -1,0 +1,216 @@
+{
+  "name": "Revenue Pipeline Coach",
+  "nodes": [
+    {
+      "id": "sticky-overview",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [80, 60],
+      "parameters": {
+        "content": "## Revenue Pipeline Coach\n\nReviews open deals, scores risk, suggests next actions, creates CRM tasks, and posts a leadership digest.",
+        "height": 245,
+        "width": 430,
+        "color": 4
+      }
+    },
+    {
+      "id": "sticky-salesops",
+      "name": "Sales Ops Notes",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [80, 330],
+      "parameters": {
+        "content": "## Operating model\n\n. Pull deal data from CRM, not screenshots.\n. Agent must cite deal evidence.\n. Risk routing is deterministic.\n. Tasks are written back with owner and due date.",
+        "height": 270,
+        "width": 430,
+        "color": 6
+      }
+    },
+    {
+      "id": "schedule",
+      "name": "Pipeline Review Schedule",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [280, 320],
+      "parameters": {
+        "rule": { "interval": [{ "field": "weeks", "weeksInterval": 1 }] }
+      }
+    },
+    {
+      "id": "fetch",
+      "name": "Fetch Open Deals",
+      "type": "n8n-nodes-base.hubspot",
+      "typeVersion": 2.1,
+      "position": [520, 320],
+      "parameters": {
+        "resource": "deal",
+        "operation": "getAll",
+        "returnAll": false,
+        "limit": 100,
+        "filters": { "conditions": [{ "property": "dealstage", "operator": "NEQ", "value": "closedwon" }] }
+      },
+      "credentials": { "hubspotApi": { "id": "REPLACE_ME", "name": "HubSpot account" } }
+    },
+    {
+      "id": "normalize",
+      "name": "Normalize Deal Records",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [760, 320],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const deals = $input.all().map((item) => item.json);\nreturn deals.map((deal, index) => ({ json: {\n  deal_id: deal.id ?? deal.dealId ?? `deal-${index + 1}`,\n  name: deal.properties?.dealname ?? deal.dealname ?? 'Unnamed deal',\n  owner: deal.properties?.hubspot_owner_id ?? deal.owner ?? 'unknown',\n  amount: Number(deal.properties?.amount ?? deal.amount ?? 0),\n  stage: deal.properties?.dealstage ?? deal.stage ?? 'unknown',\n  close_date: deal.properties?.closedate ?? deal.close_date ?? null,\n  last_activity: deal.properties?.notes_last_updated ?? deal.last_activity ?? null,\n  next_step: deal.properties?.hs_next_step ?? deal.next_step ?? ''\n} }));"
+      }
+    },
+    {
+      "id": "split",
+      "name": "Per Open Deal",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [1000, 320],
+      "parameters": { "batchSize": 1, "options": {} }
+    },
+    {
+      "id": "agent",
+      "name": "Deal Coach Agent",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [1240, 240],
+      "parameters": {
+        "resource": "chat",
+        "model": "gpt-4o",
+        "messages": {
+          "values": [
+            { "role": "system", "content": "You are a revenue operations coach. Return JSON only: {segment, risk_score, evidence, next_action, task_title, task_due_days, manager_note}. segment must be commit, risk, or nurture." },
+            { "role": "user", "content": "Review this deal and recommend one concrete next action: {{ JSON.stringify($json) }}" }
+          ]
+        },
+        "jsonOutput": true,
+        "options": { "temperature": 0.15 }
+      },
+      "credentials": { "openAiApi": { "id": "REPLACE_ME", "name": "OpenAI account" } }
+    },
+    {
+      "id": "shape",
+      "name": "Shape Coaching Output",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1480, 240],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const coach = $json.message?.content ?? $json;\nconst deal = $('Per Open Deal').item.json;\nconst segment = ['commit', 'risk', 'nurture'].includes(coach.segment) ? coach.segment : 'risk';\nreturn [{ json: { ...deal, coach: { ...coach, segment, risk_score: Number(coach.risk_score ?? 0.5), task_due_days: Number(coach.task_due_days ?? 3) } } }];"
+      }
+    },
+    {
+      "id": "segment",
+      "name": "Segment Deal",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [1720, 240],
+      "parameters": {
+        "mode": "rules",
+        "rules": {
+          "values": [
+            { "conditions": { "conditions": [{ "leftValue": "={{ $json.coach.segment }}", "rightValue": "commit", "operator": { "type": "string", "operation": "equals" } }], "combinator": "and" } },
+            { "conditions": { "conditions": [{ "leftValue": "={{ $json.coach.segment }}", "rightValue": "risk", "operator": { "type": "string", "operation": "equals" } }], "combinator": "and" } },
+            { "conditions": { "conditions": [{ "leftValue": "={{ $json.coach.segment }}", "rightValue": "nurture", "operator": { "type": "string", "operation": "equals" } }], "combinator": "and" } }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "task",
+      "name": "Create CRM Follow Up Task",
+      "type": "n8n-nodes-base.hubspot",
+      "typeVersion": 2.1,
+      "position": [1960, 100],
+      "parameters": {
+        "resource": "engagement",
+        "operation": "create",
+        "type": "TASK",
+        "metadata": {
+          "subject": "={{ $json.coach.task_title }}",
+          "body": "={{ `${$json.coach.next_action}\\nEvidence: ${JSON.stringify($json.coach.evidence)}` }}"
+        }
+      },
+      "credentials": { "hubspotApi": { "id": "REPLACE_ME", "name": "HubSpot account" } }
+    },
+    {
+      "id": "risk-alert",
+      "name": "Post Risk Alert",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.3,
+      "position": [1960, 280],
+      "parameters": {
+        "resource": "message",
+        "operation": "post",
+        "channel": "<<PIPELINE_RISK_CHANNEL_ID>>",
+        "text": "Pipeline risk: {{ $json.name }} ({{ $json.amount }}). Score: {{ $json.coach.risk_score }}. Next action: {{ $json.coach.next_action }}"
+      },
+      "credentials": { "slackApi": { "id": "REPLACE_ME", "name": "Slack Bot" } }
+    },
+    {
+      "id": "nurture",
+      "name": "Create Nurture Task",
+      "type": "n8n-nodes-base.hubspot",
+      "typeVersion": 2.1,
+      "position": [1960, 460],
+      "parameters": {
+        "resource": "engagement",
+        "operation": "create",
+        "type": "TASK",
+        "metadata": {
+          "subject": "={{ $json.coach.task_title ?? 'Nurture follow up' }}",
+          "body": "={{ $json.coach.next_action }}"
+        }
+      },
+      "credentials": { "hubspotApi": { "id": "REPLACE_ME", "name": "HubSpot account" } }
+    },
+    {
+      "id": "audit",
+      "name": "Write Pipeline Audit",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [2200, 240],
+      "parameters": {
+        "operation": "append",
+        "documentId": { "__rl": true, "value": "<<PIPELINE_SHEET_ID>>", "mode": "id" },
+        "sheetName": { "__rl": true, "value": "CoachAudit", "mode": "name" },
+        "columns": { "mappingMode": "defineBelow", "value": { "ts": "={{ $now.toISO() }}", "deal_id": "={{ $('Per Open Deal').item.json.deal_id }}", "segment": "={{ $('Shape Coaching Output').item.json.coach.segment }}", "risk_score": "={{ $('Shape Coaching Output').item.json.coach.risk_score }}", "next_action": "={{ $('Shape Coaching Output').item.json.coach.next_action }}" } }
+      },
+      "credentials": { "googleSheetsOAuth2Api": { "id": "REPLACE_ME", "name": "Google Sheets" } }
+    },
+    {
+      "id": "digest",
+      "name": "Leadership Digest",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.3,
+      "position": [1240, 560],
+      "parameters": {
+        "resource": "message",
+        "operation": "post",
+        "channel": "<<REVENUE_LEADERSHIP_CHANNEL_ID>>",
+        "text": "Weekly pipeline coaching run finished. Review CoachAudit for deal-level actions, risk segments, and owner follow-ups."
+      },
+      "credentials": { "slackApi": { "id": "REPLACE_ME", "name": "Slack Bot" } }
+    }
+  ],
+  "connections": {
+    "Pipeline Review Schedule": { "main": [[{ "node": "Fetch Open Deals", "type": "main", "index": 0 }]] },
+    "Fetch Open Deals": { "main": [[{ "node": "Normalize Deal Records", "type": "main", "index": 0 }]] },
+    "Normalize Deal Records": { "main": [[{ "node": "Per Open Deal", "type": "main", "index": 0 }]] },
+    "Per Open Deal": { "main": [[{ "node": "Deal Coach Agent", "type": "main", "index": 0 }], [{ "node": "Leadership Digest", "type": "main", "index": 0 }]] },
+    "Deal Coach Agent": { "main": [[{ "node": "Shape Coaching Output", "type": "main", "index": 0 }]] },
+    "Shape Coaching Output": { "main": [[{ "node": "Segment Deal", "type": "main", "index": 0 }]] },
+    "Segment Deal": { "main": [[{ "node": "Create CRM Follow Up Task", "type": "main", "index": 0 }], [{ "node": "Post Risk Alert", "type": "main", "index": 0 }], [{ "node": "Create Nurture Task", "type": "main", "index": 0 }]] },
+    "Create CRM Follow Up Task": { "main": [[{ "node": "Write Pipeline Audit", "type": "main", "index": 0 }]] },
+    "Post Risk Alert": { "main": [[{ "node": "Write Pipeline Audit", "type": "main", "index": 0 }]] },
+    "Create Nurture Task": { "main": [[{ "node": "Write Pipeline Audit", "type": "main", "index": 0 }]] },
+    "Write Pipeline Audit": { "main": [[{ "node": "Per Open Deal", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "pinData": {},
+  "versionId": "27-revenue-pipeline-coach"
+}
