@@ -1,5 +1,7 @@
 # n8n Agentic + Business Workflows
 
+[![CI](https://github.com/whodeanie/n8n-agentic-workflows/actions/workflows/ci.yml/badge.svg)](https://github.com/whodeanie/n8n-agentic-workflows/actions/workflows/ci.yml)
+
 Importable n8n workflow exports that show AI automation patterns in practical business systems: lead routing, support escalation, reconciliation, competitive monitoring, idempotent webhooks, eval gates, structured extraction, RAG, model fallbacks, and tool-using agents.
 
 Built by Kerry Dean Jr. as a portfolio-grade workflow library, not a sales bundle. Every workflow is checked into GitHub as JSON, documented, and validated in CI.
