@@ -529,5 +529,68 @@
       "switch"
     ],
     "workflowPath": "27-revenue-pipeline-coach/workflow.json"
+  },
+  {
+    "slug": "28-contract-clause-review-agent",
+    "name": "Contract Clause Review Agent",
+    "nodeCount": 12,
+    "stickyNoteCount": 2,
+    "triggerTypes": [
+      "webhook"
+    ],
+    "integrationTypes": [
+      "code",
+      "googleSheets",
+      "httpRequest",
+      "if",
+      "openAi",
+      "respondToWebhook",
+      "set",
+      "slack",
+      "webhook"
+    ],
+    "workflowPath": "28-contract-clause-review-agent/workflow.json"
+  },
+  {
+    "slug": "29-knowledge-base-freshness-agent",
+    "name": "Knowledge Base Freshness Agent",
+    "nodeCount": 13,
+    "stickyNoteCount": 2,
+    "triggerTypes": [
+      "scheduleTrigger"
+    ],
+    "integrationTypes": [
+      "code",
+      "googleSheets",
+      "httpRequest",
+      "if",
+      "merge",
+      "openAi",
+      "scheduleTrigger",
+      "set",
+      "slack"
+    ],
+    "workflowPath": "29-knowledge-base-freshness-agent/workflow.json"
+  },
+  {
+    "slug": "30-executive-briefing-agent",
+    "name": "Executive Briefing Agent",
+    "nodeCount": 13,
+    "stickyNoteCount": 2,
+    "triggerTypes": [
+      "scheduleTrigger"
+    ],
+    "integrationTypes": [
+      "code",
+      "gmail",
+      "googleSheets",
+      "httpRequest",
+      "if",
+      "merge",
+      "openAi",
+      "scheduleTrigger",
+      "slack"
+    ],
+    "workflowPath": "30-executive-briefing-agent/workflow.json"
   }
 ]

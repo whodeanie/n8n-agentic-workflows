@@ -1,0 +1,177 @@
+{
+  "name": "Contract Clause Review Agent",
+  "nodes": [
+    {
+      "id": "sticky-overview",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [80, 60],
+      "parameters": {
+        "content": "## Contract Clause Review Agent\n\nExtracts clauses from incoming contracts, compares them against policy, routes risky language to legal, and writes an audit trail.",
+        "height": 250,
+        "width": 430,
+        "color": 4
+      }
+    },
+    {
+      "id": "sticky-controls",
+      "name": "Legal Control Notes",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [80, 330],
+      "parameters": {
+        "content": "## Review controls\n\n. Agent extracts and flags; legal approves.\n. Missing clauses force review.\n. High-risk terms never auto-pass.\n. Audit rows preserve evidence and rationale.",
+        "height": 280,
+        "width": 430,
+        "color": 6
+      }
+    },
+    {
+      "id": "webhook",
+      "name": "Contract Intake Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [280, 320],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "legal/contract-review",
+        "responseMode": "responseNode",
+        "options": {}
+      }
+    },
+    {
+      "id": "normalize",
+      "name": "Normalize Contract Intake",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [520, 320],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const body = $json.body ?? $json;\nreturn [{ json: {\n  request_id: body.request_id ?? `contract-${Date.now()}`,\n  requester: body.requester ?? 'unknown',\n  counterparty: body.counterparty ?? body.vendor ?? 'unknown',\n  contract_type: body.contract_type ?? 'unknown',\n  deal_value: Number(body.deal_value ?? body.amount ?? 0),\n  contract_text: body.contract_text ?? body.text ?? '',\n  due_date: body.due_date ?? null\n} }];"
+      }
+    },
+    {
+      "id": "policy",
+      "name": "Fetch Clause Policy",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [760, 320],
+      "parameters": {
+        "method": "GET",
+        "url": "https://legal-policy.example.com/contracts/standard-clauses",
+        "options": {}
+      }
+    },
+    {
+      "id": "extract",
+      "name": "Extract Contract Clauses",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [1000, 320],
+      "parameters": {
+        "resource": "chat",
+        "model": "gpt-4o",
+        "messages": {
+          "values": [
+            { "role": "system", "content": "You review contracts for operational triage. Return JSON only: {risk_level, review_required, missing_clauses, risky_clauses, acceptable_clauses, summary, rationale}. risk_level is low, medium, or high." },
+            { "role": "user", "content": "Contract intake: {{ JSON.stringify($('Normalize Contract Intake').item.json) }}\nPolicy context: {{ JSON.stringify($json) }}" }
+          ]
+        },
+        "jsonOutput": true,
+        "options": { "temperature": 0.05 }
+      },
+      "credentials": { "openAiApi": { "id": "REPLACE_ME", "name": "OpenAI account" } }
+    },
+    {
+      "id": "validate",
+      "name": "Validate Clause Output",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1240, 320],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const result = $json.message?.content ?? $json;\nconst risk = ['low', 'medium', 'high'].includes(result.risk_level) ? result.risk_level : 'high';\nconst missing = Array.isArray(result.missing_clauses) ? result.missing_clauses : [];\nconst risky = Array.isArray(result.risky_clauses) ? result.risky_clauses : [];\nreturn [{ json: { ...$('Normalize Contract Intake').item.json, review: { ...result, risk_level: risk, missing_clauses: missing, risky_clauses: risky }, has_required_shape: Boolean(result.summary && result.rationale) } }];"
+      }
+    },
+    {
+      "id": "gate",
+      "name": "Requires Legal Review?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1480, 320],
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            { "leftValue": "={{ !$json.has_required_shape || $json.review.review_required === true || $json.review.risk_level !== 'low' || $json.review.missing_clauses.length > 0 || $json.deal_value > 50000 }}", "rightValue": true, "operator": { "type": "boolean", "operation": "equal" } }
+          ],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "legal",
+      "name": "Send Legal Review",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.3,
+      "position": [1720, 220],
+      "parameters": {
+        "resource": "message",
+        "operation": "post",
+        "channel": "<<LEGAL_REVIEW_CHANNEL_ID>>",
+        "text": "Contract review needed: {{ $json.counterparty }} / {{ $json.contract_type }}. Risk: {{ $json.review.risk_level }}. Missing: {{ JSON.stringify($json.review.missing_clauses) }}. Risky clauses: {{ JSON.stringify($json.review.risky_clauses) }}"
+      },
+      "credentials": { "slackApi": { "id": "REPLACE_ME", "name": "Slack Bot" } }
+    },
+    {
+      "id": "standard",
+      "name": "Build Standard Response",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3,
+      "position": [1720, 440],
+      "parameters": {
+        "assignments": { "assignments": [
+          { "id": "s1", "name": "status", "value": "standard_terms_reviewed", "type": "string" },
+          { "id": "s2", "name": "summary", "value": "={{ $json.review.summary }}", "type": "string" }
+        ] },
+        "options": {}
+      }
+    },
+    {
+      "id": "audit",
+      "name": "Write Contract Audit",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [1960, 320],
+      "parameters": {
+        "operation": "append",
+        "documentId": { "__rl": true, "value": "<<LEGAL_AUDIT_SHEET_ID>>", "mode": "id" },
+        "sheetName": { "__rl": true, "value": "ContractReview", "mode": "name" },
+        "columns": { "mappingMode": "defineBelow", "value": { "ts": "={{ $now.toISO() }}", "request_id": "={{ $('Normalize Contract Intake').item.json.request_id }}", "counterparty": "={{ $('Normalize Contract Intake').item.json.counterparty }}", "risk": "={{ $('Validate Clause Output').item.json.review.risk_level }}", "status": "={{ $json.status ?? 'legal_review_requested' }}" } }
+      },
+      "credentials": { "googleSheetsOAuth2Api": { "id": "REPLACE_ME", "name": "Google Sheets" } }
+    },
+    {
+      "id": "respond",
+      "name": "Respond Contract Summary",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [2200, 320],
+      "parameters": { "options": {}, "respondWith": "allIncomingItems" }
+    }
+  ],
+  "connections": {
+    "Contract Intake Webhook": { "main": [[{ "node": "Normalize Contract Intake", "type": "main", "index": 0 }]] },
+    "Normalize Contract Intake": { "main": [[{ "node": "Fetch Clause Policy", "type": "main", "index": 0 }]] },
+    "Fetch Clause Policy": { "main": [[{ "node": "Extract Contract Clauses", "type": "main", "index": 0 }]] },
+    "Extract Contract Clauses": { "main": [[{ "node": "Validate Clause Output", "type": "main", "index": 0 }]] },
+    "Validate Clause Output": { "main": [[{ "node": "Requires Legal Review?", "type": "main", "index": 0 }]] },
+    "Requires Legal Review?": { "main": [[{ "node": "Send Legal Review", "type": "main", "index": 0 }], [{ "node": "Build Standard Response", "type": "main", "index": 0 }]] },
+    "Send Legal Review": { "main": [[{ "node": "Write Contract Audit", "type": "main", "index": 0 }]] },
+    "Build Standard Response": { "main": [[{ "node": "Write Contract Audit", "type": "main", "index": 0 }]] },
+    "Write Contract Audit": { "main": [[{ "node": "Respond Contract Summary", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "pinData": {},
+  "versionId": "28-contract-clause-review-agent"
+}

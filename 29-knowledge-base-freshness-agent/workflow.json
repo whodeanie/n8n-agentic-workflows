@@ -1,0 +1,199 @@
+{
+  "name": "Knowledge Base Freshness Agent",
+  "nodes": [
+    {
+      "id": "sticky-overview",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [80, 60],
+      "parameters": {
+        "content": "## Knowledge Base Freshness Agent\n\nCompares support search gaps with existing articles, scores stale content, and routes safe update recommendations to docs owners.",
+        "height": 250,
+        "width": 430,
+        "color": 4
+      }
+    },
+    {
+      "id": "sticky-publish",
+      "name": "Publishing Notes",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [80, 330],
+      "parameters": {
+        "content": "## Content controls\n\n. Search gaps are evidence.\n. Product/pricing claims require owner review.\n. Low confidence never publishes.\n. Audit records connect source signals to recommendations.",
+        "height": 280,
+        "width": 430,
+        "color": 6
+      }
+    },
+    {
+      "id": "schedule",
+      "name": "Freshness Schedule",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [280, 320],
+      "parameters": {
+        "rule": { "interval": [{ "field": "weeks", "weeksInterval": 1 }] }
+      }
+    },
+    {
+      "id": "gaps",
+      "name": "Fetch Support Search Gaps",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [520, 220],
+      "parameters": {
+        "method": "GET",
+        "url": "https://support-analytics.example.com/search-gaps?window=14d",
+        "options": {}
+      }
+    },
+    {
+      "id": "articles",
+      "name": "Fetch KB Articles",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [520, 440],
+      "parameters": {
+        "method": "GET",
+        "url": "https://docs.example.com/api/articles?status=published",
+        "options": {}
+      }
+    },
+    {
+      "id": "merge",
+      "name": "Merge Search And Article Signals",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [760, 320],
+      "parameters": {
+        "mode": "combine",
+        "combinationMode": "mergeByPosition",
+        "options": {}
+      }
+    },
+    {
+      "id": "agent",
+      "name": "Freshness Recommendation Agent",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [1000, 320],
+      "parameters": {
+        "resource": "chat",
+        "model": "gpt-4o",
+        "messages": {
+          "values": [
+            { "role": "system", "content": "You maintain a knowledge base. Return JSON only: {recommendations:[{article_id,title,action,confidence,risk_level,evidence,owner_note}], summary}. action is update, merge, create, or leave." },
+            { "role": "user", "content": "Search gaps and article inventory: {{ JSON.stringify($json) }}" }
+          ]
+        },
+        "jsonOutput": true,
+        "options": { "temperature": 0.1 }
+      },
+      "credentials": { "openAiApi": { "id": "REPLACE_ME", "name": "OpenAI account" } }
+    },
+    {
+      "id": "expand",
+      "name": "Expand Recommendations",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1240, 320],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const content = $json.message?.content ?? $json;\nconst recommendations = Array.isArray(content.recommendations) ? content.recommendations : [];\nreturn recommendations.map((rec, index) => ({ json: {\n  recommendation_id: rec.article_id ?? `kb-rec-${index + 1}`,\n  title: rec.title ?? 'Untitled article',\n  action: ['update', 'merge', 'create', 'leave'].includes(rec.action) ? rec.action : 'update',\n  confidence: Number(rec.confidence ?? 0),\n  risk_level: ['low', 'medium', 'high'].includes(rec.risk_level) ? rec.risk_level : 'high',\n  evidence: rec.evidence ?? [],\n  owner_note: rec.owner_note ?? content.summary ?? ''\n} }));"
+      }
+    },
+    {
+      "id": "gate",
+      "name": "Needs Docs Owner Review?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1480, 320],
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            { "leftValue": "={{ $json.confidence < 0.82 || $json.risk_level !== 'low' || $json.action === 'create' }}", "rightValue": true, "operator": { "type": "boolean", "operation": "equal" } }
+          ],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "ticket",
+      "name": "Create Docs Review Ticket",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.3,
+      "position": [1720, 220],
+      "parameters": {
+        "resource": "message",
+        "operation": "post",
+        "channel": "<<DOCS_REVIEW_CHANNEL_ID>>",
+        "text": "KB review needed: {{ $json.title }}. Action: {{ $json.action }}. Risk: {{ $json.risk_level }}. Evidence: {{ JSON.stringify($json.evidence) }}. Note: {{ $json.owner_note }}"
+      },
+      "credentials": { "slackApi": { "id": "REPLACE_ME", "name": "Slack Bot" } }
+    },
+    {
+      "id": "queue",
+      "name": "Queue Low Risk Update",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1720, 440],
+      "parameters": {
+        "method": "POST",
+        "url": "https://docs.example.com/api/update-queue",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ id: $json.recommendation_id, title: $json.title, action: $json.action, note: $json.owner_note, evidence: $json.evidence }) }}",
+        "options": {}
+      },
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 1000
+    },
+    {
+      "id": "audit",
+      "name": "Write Freshness Audit",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [1960, 320],
+      "parameters": {
+        "operation": "append",
+        "documentId": { "__rl": true, "value": "<<KB_AUDIT_SHEET_ID>>", "mode": "id" },
+        "sheetName": { "__rl": true, "value": "FreshnessAudit", "mode": "name" },
+        "columns": { "mappingMode": "defineBelow", "value": { "ts": "={{ $now.toISO() }}", "recommendation_id": "={{ $('Expand Recommendations').item.json.recommendation_id }}", "title": "={{ $('Expand Recommendations').item.json.title }}", "action": "={{ $('Expand Recommendations').item.json.action }}", "risk": "={{ $('Expand Recommendations').item.json.risk_level }}" } }
+      },
+      "credentials": { "googleSheetsOAuth2Api": { "id": "REPLACE_ME", "name": "Google Sheets" } }
+    },
+    {
+      "id": "summary",
+      "name": "Build Freshness Summary",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3,
+      "position": [2200, 320],
+      "parameters": {
+        "assignments": { "assignments": [
+          { "id": "f1", "name": "status", "value": "freshness_run_complete", "type": "string" },
+          { "id": "f2", "name": "completed_at", "value": "={{ $now.toISO() }}", "type": "string" }
+        ] },
+        "options": {}
+      }
+    }
+  ],
+  "connections": {
+    "Freshness Schedule": { "main": [[{ "node": "Fetch Support Search Gaps", "type": "main", "index": 0 }, { "node": "Fetch KB Articles", "type": "main", "index": 0 }]] },
+    "Fetch Support Search Gaps": { "main": [[{ "node": "Merge Search And Article Signals", "type": "main", "index": 0 }]] },
+    "Fetch KB Articles": { "main": [[{ "node": "Merge Search And Article Signals", "type": "main", "index": 1 }]] },
+    "Merge Search And Article Signals": { "main": [[{ "node": "Freshness Recommendation Agent", "type": "main", "index": 0 }]] },
+    "Freshness Recommendation Agent": { "main": [[{ "node": "Expand Recommendations", "type": "main", "index": 0 }]] },
+    "Expand Recommendations": { "main": [[{ "node": "Needs Docs Owner Review?", "type": "main", "index": 0 }]] },
+    "Needs Docs Owner Review?": { "main": [[{ "node": "Create Docs Review Ticket", "type": "main", "index": 0 }], [{ "node": "Queue Low Risk Update", "type": "main", "index": 0 }]] },
+    "Create Docs Review Ticket": { "main": [[{ "node": "Write Freshness Audit", "type": "main", "index": 0 }]] },
+    "Queue Low Risk Update": { "main": [[{ "node": "Write Freshness Audit", "type": "main", "index": 0 }]] },
+    "Write Freshness Audit": { "main": [[{ "node": "Build Freshness Summary", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "pinData": {},
+  "versionId": "29-knowledge-base-freshness-agent"
+}

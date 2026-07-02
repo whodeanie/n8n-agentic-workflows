@@ -1,0 +1,195 @@
+{
+  "name": "Executive Briefing Agent",
+  "nodes": [
+    {
+      "id": "sticky-overview",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [80, 60],
+      "parameters": {
+        "content": "## Executive Briefing Agent\n\nPulls metric snapshots and calendar risks, generates a source-cited operating brief, gates risky summaries, and writes an audit row.",
+        "height": 250,
+        "width": 430,
+        "color": 4
+      }
+    },
+    {
+      "id": "sticky-review",
+      "name": "Briefing Review Notes",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [80, 330],
+      "parameters": {
+        "content": "## Briefing controls\n\n. Cite metrics, do not invent context.\n. Keep facts separate from recommendations.\n. High-risk summaries go to review.\n. Email remains a draft unless approved.",
+        "height": 280,
+        "width": 430,
+        "color": 6
+      }
+    },
+    {
+      "id": "schedule",
+      "name": "Briefing Schedule",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [280, 320],
+      "parameters": {
+        "rule": { "interval": [{ "field": "weeks", "weeksInterval": 1 }] }
+      }
+    },
+    {
+      "id": "metrics",
+      "name": "Fetch Metrics Snapshot",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [520, 220],
+      "parameters": {
+        "method": "GET",
+        "url": "https://metrics.example.com/operating-snapshot?window=7d",
+        "options": {}
+      }
+    },
+    {
+      "id": "calendar",
+      "name": "Fetch Calendar Risks",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [520, 440],
+      "parameters": {
+        "method": "GET",
+        "url": "https://ops.example.com/calendar-risks?window=14d",
+        "options": {}
+      }
+    },
+    {
+      "id": "merge",
+      "name": "Merge Briefing Signals",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [760, 320],
+      "parameters": {
+        "mode": "combine",
+        "combinationMode": "mergeByPosition",
+        "options": {}
+      }
+    },
+    {
+      "id": "agent",
+      "name": "Generate Executive Brief",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [1000, 320],
+      "parameters": {
+        "resource": "chat",
+        "model": "gpt-4o",
+        "messages": {
+          "values": [
+            { "role": "system", "content": "You write executive operating briefs from supplied data only. Return JSON only: {confidence, risk_level, subject, facts, risks, decisions_needed, recommended_actions, source_notes, email_body}. Do not invent metrics." },
+            { "role": "user", "content": "Create a concise weekly operating brief from these signals: {{ JSON.stringify($json) }}" }
+          ]
+        },
+        "jsonOutput": true,
+        "options": { "temperature": 0.1 }
+      },
+      "credentials": { "openAiApi": { "id": "REPLACE_ME", "name": "OpenAI account" } }
+    },
+    {
+      "id": "validate",
+      "name": "Validate Brief",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1240, 320],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const brief = $json.message?.content ?? $json;\nconst facts = Array.isArray(brief.facts) ? brief.facts : [];\nconst sourceNotes = Array.isArray(brief.source_notes) ? brief.source_notes : [];\nconst hasRequiredEvidence = facts.length > 0 && sourceNotes.length > 0;\nconst risk = ['low', 'medium', 'high'].includes(brief.risk_level) ? brief.risk_level : 'high';\nreturn [{ json: { brief: { ...brief, risk_level: risk, confidence: Number(brief.confidence ?? 0) }, hasRequiredEvidence } }];"
+      }
+    },
+    {
+      "id": "gate",
+      "name": "Needs Human Review?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1480, 320],
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            { "leftValue": "={{ !$json.hasRequiredEvidence || $json.brief.confidence < 0.85 || $json.brief.risk_level === 'high' }}", "rightValue": true, "operator": { "type": "boolean", "operation": "equal" } }
+          ],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "review",
+      "name": "Send Review Queue",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.3,
+      "position": [1720, 220],
+      "parameters": {
+        "resource": "message",
+        "operation": "post",
+        "channel": "<<EXEC_BRIEF_REVIEW_CHANNEL_ID>>",
+        "text": "Executive brief needs review. Risk: {{ $json.brief.risk_level }}. Confidence: {{ $json.brief.confidence }}. Decisions: {{ JSON.stringify($json.brief.decisions_needed) }}"
+      },
+      "credentials": { "slackApi": { "id": "REPLACE_ME", "name": "Slack Bot" } }
+    },
+    {
+      "id": "draft",
+      "name": "Create Leadership Email Draft",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [1720, 440],
+      "parameters": {
+        "resource": "draft",
+        "operation": "create",
+        "subject": "={{ $json.brief.subject }}",
+        "message": "={{ $json.brief.email_body }}",
+        "toList": "<<LEADERSHIP_DISTRIBUTION_LIST>>"
+      },
+      "credentials": { "gmailOAuth2": { "id": "REPLACE_ME", "name": "Gmail account" } }
+    },
+    {
+      "id": "digest",
+      "name": "Post Leadership Digest",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.3,
+      "position": [1960, 440],
+      "parameters": {
+        "resource": "message",
+        "operation": "post",
+        "channel": "<<LEADERSHIP_CHANNEL_ID>>",
+        "text": "*{{ $json.brief.subject }}*\nFacts: {{ JSON.stringify($json.brief.facts) }}\nRisks: {{ JSON.stringify($json.brief.risks) }}\nActions: {{ JSON.stringify($json.brief.recommended_actions) }}"
+      },
+      "credentials": { "slackApi": { "id": "REPLACE_ME", "name": "Slack Bot" } }
+    },
+    {
+      "id": "audit",
+      "name": "Write Briefing Audit",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [2200, 320],
+      "parameters": {
+        "operation": "append",
+        "documentId": { "__rl": true, "value": "<<BRIEFING_AUDIT_SHEET_ID>>", "mode": "id" },
+        "sheetName": { "__rl": true, "value": "BriefingAudit", "mode": "name" },
+        "columns": { "mappingMode": "defineBelow", "value": { "ts": "={{ $now.toISO() }}", "subject": "={{ $('Validate Brief').item.json.brief.subject }}", "risk": "={{ $('Validate Brief').item.json.brief.risk_level }}", "confidence": "={{ $('Validate Brief').item.json.brief.confidence }}", "reviewed": "={{ $('Needs Human Review?').item.json.hasRequiredEvidence ? 'routed' : 'missing_evidence' }}" } }
+      },
+      "credentials": { "googleSheetsOAuth2Api": { "id": "REPLACE_ME", "name": "Google Sheets" } }
+    }
+  ],
+  "connections": {
+    "Briefing Schedule": { "main": [[{ "node": "Fetch Metrics Snapshot", "type": "main", "index": 0 }, { "node": "Fetch Calendar Risks", "type": "main", "index": 0 }]] },
+    "Fetch Metrics Snapshot": { "main": [[{ "node": "Merge Briefing Signals", "type": "main", "index": 0 }]] },
+    "Fetch Calendar Risks": { "main": [[{ "node": "Merge Briefing Signals", "type": "main", "index": 1 }]] },
+    "Merge Briefing Signals": { "main": [[{ "node": "Generate Executive Brief", "type": "main", "index": 0 }]] },
+    "Generate Executive Brief": { "main": [[{ "node": "Validate Brief", "type": "main", "index": 0 }]] },
+    "Validate Brief": { "main": [[{ "node": "Needs Human Review?", "type": "main", "index": 0 }]] },
+    "Needs Human Review?": { "main": [[{ "node": "Send Review Queue", "type": "main", "index": 0 }], [{ "node": "Create Leadership Email Draft", "type": "main", "index": 0 }]] },
+    "Send Review Queue": { "main": [[{ "node": "Write Briefing Audit", "type": "main", "index": 0 }]] },
+    "Create Leadership Email Draft": { "main": [[{ "node": "Post Leadership Digest", "type": "main", "index": 0 }]] },
+    "Post Leadership Digest": { "main": [[{ "node": "Write Briefing Audit", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "pinData": {},
+  "versionId": "30-executive-briefing-agent"
+}
