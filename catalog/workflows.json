@@ -742,5 +742,85 @@
       "webhook"
     ],
     "workflowPath": "37-weekend-plan-concierge-agent/workflow.json"
+  },
+  {
+    "slug": "38-home-workout-progression-agent",
+    "name": "Home Workout Progression Agent",
+    "nodeCount": 14,
+    "stickyNoteCount": 2,
+    "triggerTypes": [
+      "webhook"
+    ],
+    "integrationTypes": [
+      "code",
+      "googleSheets",
+      "if",
+      "merge",
+      "openAi",
+      "respondToWebhook",
+      "slack",
+      "webhook"
+    ],
+    "workflowPath": "38-home-workout-progression-agent/workflow.json"
+  },
+  {
+    "slug": "39-subscription-savings-agent",
+    "name": "Subscription Savings Agent",
+    "nodeCount": 13,
+    "stickyNoteCount": 2,
+    "triggerTypes": [
+      "scheduleTrigger"
+    ],
+    "integrationTypes": [
+      "code",
+      "googleSheets",
+      "if",
+      "merge",
+      "openAi",
+      "scheduleTrigger",
+      "slack"
+    ],
+    "workflowPath": "39-subscription-savings-agent/workflow.json"
+  },
+  {
+    "slug": "40-study-spaced-repetition-agent",
+    "name": "Study Spaced Repetition Agent",
+    "nodeCount": 14,
+    "stickyNoteCount": 2,
+    "triggerTypes": [
+      "webhook"
+    ],
+    "integrationTypes": [
+      "code",
+      "googleSheets",
+      "if",
+      "merge",
+      "openAi",
+      "respondToWebhook",
+      "slack",
+      "webhook"
+    ],
+    "workflowPath": "40-study-spaced-repetition-agent/workflow.json"
+  },
+  {
+    "slug": "41-travel-packing-weather-agent",
+    "name": "Travel Packing Weather Agent",
+    "nodeCount": 14,
+    "stickyNoteCount": 2,
+    "triggerTypes": [
+      "webhook"
+    ],
+    "integrationTypes": [
+      "code",
+      "googleSheets",
+      "httpRequest",
+      "if",
+      "merge",
+      "openAi",
+      "respondToWebhook",
+      "slack",
+      "webhook"
+    ],
+    "workflowPath": "41-travel-packing-weather-agent/workflow.json"
   }
 ]

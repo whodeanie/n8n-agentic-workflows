@@ -1,0 +1,205 @@
+{
+  "name": "Travel Packing Weather Agent",
+  "nodes": [
+    {
+      "id": "sticky-overview",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [80, 60],
+      "parameters": {
+        "content": "## Travel Packing Weather Agent\n\nBuilds a packing checklist from trip details, forecast, itinerary, documents, and weather-risk backup needs.",
+        "height": 250,
+        "width": 430,
+        "color": 4
+      }
+    },
+    {
+      "id": "sticky-travel",
+      "name": "Travel Notes",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [80, 330],
+      "parameters": {
+        "content": "## Travel controls\n\n. Documents are explicit.\n. Weather risks get backup items.\n. Checklist separates essentials and nice-to-haves.\n. No booking or purchase actions.",
+        "height": 280,
+        "width": 430,
+        "color": 6
+      }
+    },
+    {
+      "id": "webhook",
+      "name": "Packing Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [280, 320],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "personal/travel-packing",
+        "responseMode": "responseNode",
+        "options": {}
+      }
+    },
+    {
+      "id": "normalize",
+      "name": "Normalize Trip",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [520, 320],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const body = $json.body ?? $json;\nreturn [{ json: {\n  trip_id: body.trip_id ?? `trip-${Date.now()}`,\n  destination: body.destination ?? 'unknown destination',\n  start_date: body.start_date ?? null,\n  end_date: body.end_date ?? null,\n  travelers: Number(body.travelers ?? 1),\n  trip_type: body.trip_type ?? 'personal',\n  activities: body.activities ?? [],\n  baggage: body.baggage ?? 'carry-on',\n  documents: body.documents ?? []\n} }];"
+      }
+    },
+    {
+      "id": "forecast",
+      "name": "Fetch Forecast",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [760, 200],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ `https://weather.example.com/trip?destination=${encodeURIComponent($json.destination)}&start=${$json.start_date}&end=${$json.end_date}` }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "itinerary",
+      "name": "Fetch Itinerary",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [760, 440],
+      "parameters": {
+        "operation": "read",
+        "documentId": { "__rl": true, "value": "<<TRAVEL_SHEET_ID>>", "mode": "id" },
+        "sheetName": { "__rl": true, "value": "Itinerary", "mode": "name" },
+        "options": {}
+      },
+      "credentials": { "googleSheetsOAuth2Api": { "id": "REPLACE_ME", "name": "Google Sheets" } }
+    },
+    {
+      "id": "merge",
+      "name": "Merge Trip Context",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [1000, 320],
+      "parameters": {
+        "mode": "combine",
+        "combinationMode": "mergeByPosition",
+        "options": {}
+      }
+    },
+    {
+      "id": "agent",
+      "name": "Packing List Agent",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [1240, 320],
+      "parameters": {
+        "resource": "chat",
+        "model": "gpt-4o",
+        "messages": {
+          "values": [
+            { "role": "system", "content": "You create practical packing checklists. Return JSON only: {essentials, clothing, weather_items, activity_items, documents, optional_items, missing_documents, weather_risk, confidence, notes}." },
+            { "role": "user", "content": "Trip: {{ JSON.stringify($('Normalize Trip').item.json) }}\nForecast and itinerary: {{ JSON.stringify($json) }}" }
+          ]
+        },
+        "jsonOutput": true,
+        "options": { "temperature": 0.18 }
+      },
+      "credentials": { "openAiApi": { "id": "REPLACE_ME", "name": "OpenAI account" } }
+    },
+    {
+      "id": "shape",
+      "name": "Validate Packing List",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1480, 320],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const list = $json.message?.content ?? $json;\nconst trip = $('Normalize Trip').item.json;\nreturn [{ json: { ...trip, packing: { ...list, essentials: Array.isArray(list.essentials) ? list.essentials : [], missing_documents: Array.isArray(list.missing_documents) ? list.missing_documents : [], confidence: Number(list.confidence ?? 0), weather_risk: list.weather_risk ?? 'unknown' } } }];"
+      }
+    },
+    {
+      "id": "gate",
+      "name": "Needs Travel Review?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1720, 320],
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            { "leftValue": "={{ $json.packing.missing_documents.length > 0 || $json.packing.weather_risk === 'high' || $json.packing.confidence < 0.84 }}", "rightValue": true, "operator": { "type": "boolean", "operation": "equal" } }
+          ],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "review",
+      "name": "Send Travel Review",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.3,
+      "position": [1960, 220],
+      "parameters": {
+        "resource": "message",
+        "operation": "post",
+        "channel": "<<TRAVEL_REVIEW_CHANNEL_ID>>",
+        "text": "Travel checklist needs review for {{ $json.destination }}. Missing docs: {{ JSON.stringify($json.packing.missing_documents) }}. Weather risk: {{ $json.packing.weather_risk }}"
+      },
+      "credentials": { "slackApi": { "id": "REPLACE_ME", "name": "Slack Bot" } }
+    },
+    {
+      "id": "save",
+      "name": "Save Packing Checklist",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [1960, 440],
+      "parameters": {
+        "operation": "append",
+        "documentId": { "__rl": true, "value": "<<TRAVEL_SHEET_ID>>", "mode": "id" },
+        "sheetName": { "__rl": true, "value": "PackingLists", "mode": "name" },
+        "columns": { "mappingMode": "defineBelow", "value": { "ts": "={{ $now.toISO() }}", "trip_id": "={{ $json.trip_id }}", "destination": "={{ $json.destination }}", "checklist": "={{ JSON.stringify($json.packing) }}" } }
+      },
+      "credentials": { "googleSheetsOAuth2Api": { "id": "REPLACE_ME", "name": "Google Sheets" } }
+    },
+    {
+      "id": "audit",
+      "name": "Write Packing Audit",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [2200, 320],
+      "parameters": {
+        "operation": "append",
+        "documentId": { "__rl": true, "value": "<<TRAVEL_SHEET_ID>>", "mode": "id" },
+        "sheetName": { "__rl": true, "value": "PackingAudit", "mode": "name" },
+        "columns": { "mappingMode": "defineBelow", "value": { "ts": "={{ $now.toISO() }}", "trip_id": "={{ $('Normalize Trip').item.json.trip_id }}", "weather_risk": "={{ $('Validate Packing List').item.json.packing.weather_risk }}", "confidence": "={{ $('Validate Packing List').item.json.packing.confidence }}" } }
+      },
+      "credentials": { "googleSheetsOAuth2Api": { "id": "REPLACE_ME", "name": "Google Sheets" } }
+    },
+    {
+      "id": "respond",
+      "name": "Respond Packing List",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [2440, 320],
+      "parameters": { "options": {}, "respondWith": "allIncomingItems" }
+    }
+  ],
+  "connections": {
+    "Packing Webhook": { "main": [[{ "node": "Normalize Trip", "type": "main", "index": 0 }]] },
+    "Normalize Trip": { "main": [[{ "node": "Fetch Forecast", "type": "main", "index": 0 }, { "node": "Fetch Itinerary", "type": "main", "index": 0 }]] },
+    "Fetch Forecast": { "main": [[{ "node": "Merge Trip Context", "type": "main", "index": 0 }]] },
+    "Fetch Itinerary": { "main": [[{ "node": "Merge Trip Context", "type": "main", "index": 1 }]] },
+    "Merge Trip Context": { "main": [[{ "node": "Packing List Agent", "type": "main", "index": 0 }]] },
+    "Packing List Agent": { "main": [[{ "node": "Validate Packing List", "type": "main", "index": 0 }]] },
+    "Validate Packing List": { "main": [[{ "node": "Needs Travel Review?", "type": "main", "index": 0 }]] },
+    "Needs Travel Review?": { "main": [[{ "node": "Send Travel Review", "type": "main", "index": 0 }], [{ "node": "Save Packing Checklist", "type": "main", "index": 0 }]] },
+    "Send Travel Review": { "main": [[{ "node": "Write Packing Audit", "type": "main", "index": 0 }]] },
+    "Save Packing Checklist": { "main": [[{ "node": "Write Packing Audit", "type": "main", "index": 0 }]] },
+    "Write Packing Audit": { "main": [[{ "node": "Respond Packing List", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "pinData": {},
+  "versionId": "41-travel-packing-weather-agent"
+}

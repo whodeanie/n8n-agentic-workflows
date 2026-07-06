@@ -54,6 +54,10 @@ Built by Kerry Dean Jr. as a portfolio-grade workflow library, not a sales bundl
 | 35 | Creator Content Remix Agent | Long-form content remixing, platform drafts, brand-safety review, scheduling queue, and audit. |
 | 36 | Fantasy Sports Waiver Agent | Roster, news, injury, and matchup signals for waiver recommendations and watchlists. |
 | 37 | Weekend Plan Concierge Agent | Weather, events, food ideas, budget-aware itineraries, backup plans, and calendar drafts. |
+| 38 | Home Workout Progression Agent | Workout history, equipment-aware programming, recovery checks, training plan save, and audit. |
+| 39 | Subscription Savings Agent | Recurring charge detection, savings recommendations, cancellation review, watchlist, and audit. |
+| 40 | Study Spaced Repetition Agent | Quiz history, weak-area scoring, spaced review schedules, card creation, and audit. |
+| 41 | Travel Packing Weather Agent | Trip details, forecast, itinerary, packing checklist, document reminders, and audit. |
 
 The generated machine-readable catalog lives at `catalog/workflows.json`.
 

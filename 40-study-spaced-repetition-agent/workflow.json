@@ -1,0 +1,207 @@
+{
+  "name": "Study Spaced Repetition Agent",
+  "nodes": [
+    {
+      "id": "sticky-overview",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [80, 60],
+      "parameters": {
+        "content": "## Study Spaced Repetition Agent\n\nTurns quiz history and goals into spaced review sessions, weak-area cards, and a progress audit.",
+        "height": 250,
+        "width": 430,
+        "color": 4
+      }
+    },
+    {
+      "id": "sticky-learning",
+      "name": "Learning Notes",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [80, 330],
+      "parameters": {
+        "content": "## Learning controls\n\n. Weak areas come from quiz evidence.\n. Cards require answer explanations.\n. Mastered topics move later.\n. Audit preserves why each topic was scheduled.",
+        "height": 280,
+        "width": 430,
+        "color": 6
+      }
+    },
+    {
+      "id": "webhook",
+      "name": "Study Plan Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [280, 320],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "personal/study-spaced-repetition",
+        "responseMode": "responseNode",
+        "options": {}
+      }
+    },
+    {
+      "id": "normalize",
+      "name": "Normalize Study Goal",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [520, 320],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const body = $json.body ?? $json;\nreturn [{ json: {\n  session_id: body.session_id ?? `study-${Date.now()}`,\n  subject: body.subject ?? 'general study',\n  exam_date: body.exam_date ?? null,\n  daily_minutes: Number(body.daily_minutes ?? 30),\n  target_score: Number(body.target_score ?? 0.85),\n  topics: body.topics ?? [],\n  preferred_style: body.preferred_style ?? 'short explanations and retrieval practice'\n} }];"
+      }
+    },
+    {
+      "id": "history",
+      "name": "Fetch Quiz History",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [760, 200],
+      "parameters": {
+        "operation": "read",
+        "documentId": { "__rl": true, "value": "<<STUDY_SHEET_ID>>", "mode": "id" },
+        "sheetName": { "__rl": true, "value": "QuizHistory", "mode": "name" },
+        "options": {}
+      },
+      "credentials": { "googleSheetsOAuth2Api": { "id": "REPLACE_ME", "name": "Google Sheets" } }
+    },
+    {
+      "id": "cards",
+      "name": "Fetch Existing Cards",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [760, 440],
+      "parameters": {
+        "operation": "read",
+        "documentId": { "__rl": true, "value": "<<STUDY_SHEET_ID>>", "mode": "id" },
+        "sheetName": { "__rl": true, "value": "Cards", "mode": "name" },
+        "options": {}
+      },
+      "credentials": { "googleSheetsOAuth2Api": { "id": "REPLACE_ME", "name": "Google Sheets" } }
+    },
+    {
+      "id": "merge",
+      "name": "Merge Study Context",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [1000, 320],
+      "parameters": {
+        "mode": "combine",
+        "combinationMode": "mergeByPosition",
+        "options": {}
+      }
+    },
+    {
+      "id": "agent",
+      "name": "Study Planning Agent",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [1240, 320],
+      "parameters": {
+        "resource": "chat",
+        "model": "gpt-4o",
+        "messages": {
+          "values": [
+            { "role": "system", "content": "You create spaced repetition study plans. Return JSON only: {review_schedule, new_cards, weak_areas, mastered_topics, confidence, rationale}." },
+            { "role": "user", "content": "Study goal: {{ JSON.stringify($('Normalize Study Goal').item.json) }}\nQuiz history and cards: {{ JSON.stringify($json) }}" }
+          ]
+        },
+        "jsonOutput": true,
+        "options": { "temperature": 0.15 }
+      },
+      "credentials": { "openAiApi": { "id": "REPLACE_ME", "name": "OpenAI account" } }
+    },
+    {
+      "id": "shape",
+      "name": "Validate Study Plan",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1480, 320],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const plan = $json.message?.content ?? $json;\nconst goal = $('Normalize Study Goal').item.json;\nreturn [{ json: { ...goal, plan: { ...plan, review_schedule: Array.isArray(plan.review_schedule) ? plan.review_schedule : [], new_cards: Array.isArray(plan.new_cards) ? plan.new_cards : [], weak_areas: Array.isArray(plan.weak_areas) ? plan.weak_areas : [], confidence: Number(plan.confidence ?? 0) } } }];"
+      }
+    },
+    {
+      "id": "gate",
+      "name": "Needs Weak Area Push?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1720, 320],
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            { "leftValue": "={{ $json.plan.weak_areas.length > 0 || $json.plan.confidence < 0.84 }}", "rightValue": true, "operator": { "type": "boolean", "operation": "equal" } }
+          ],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "notify",
+      "name": "Send Weak Area Review",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.3,
+      "position": [1960, 220],
+      "parameters": {
+        "resource": "message",
+        "operation": "post",
+        "channel": "<<STUDY_REVIEW_CHANNEL_ID>>",
+        "text": "Study focus for {{ $json.subject }}: {{ JSON.stringify($json.plan.weak_areas) }}. Schedule: {{ JSON.stringify($json.plan.review_schedule) }}"
+      },
+      "credentials": { "slackApi": { "id": "REPLACE_ME", "name": "Slack Bot" } }
+    },
+    {
+      "id": "save-cards",
+      "name": "Save New Cards",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [1960, 440],
+      "parameters": {
+        "operation": "append",
+        "documentId": { "__rl": true, "value": "<<STUDY_SHEET_ID>>", "mode": "id" },
+        "sheetName": { "__rl": true, "value": "Cards", "mode": "name" },
+        "columns": { "mappingMode": "defineBelow", "value": { "ts": "={{ $now.toISO() }}", "session_id": "={{ $json.session_id }}", "cards": "={{ JSON.stringify($json.plan.new_cards) }}" } }
+      },
+      "credentials": { "googleSheetsOAuth2Api": { "id": "REPLACE_ME", "name": "Google Sheets" } }
+    },
+    {
+      "id": "audit",
+      "name": "Write Study Audit",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [2200, 320],
+      "parameters": {
+        "operation": "append",
+        "documentId": { "__rl": true, "value": "<<STUDY_SHEET_ID>>", "mode": "id" },
+        "sheetName": { "__rl": true, "value": "StudyAudit", "mode": "name" },
+        "columns": { "mappingMode": "defineBelow", "value": { "ts": "={{ $now.toISO() }}", "session_id": "={{ $('Normalize Study Goal').item.json.session_id }}", "weak_areas": "={{ JSON.stringify($('Validate Study Plan').item.json.plan.weak_areas) }}", "confidence": "={{ $('Validate Study Plan').item.json.plan.confidence }}" } }
+      },
+      "credentials": { "googleSheetsOAuth2Api": { "id": "REPLACE_ME", "name": "Google Sheets" } }
+    },
+    {
+      "id": "respond",
+      "name": "Respond Study Plan",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [2440, 320],
+      "parameters": { "options": {}, "respondWith": "allIncomingItems" }
+    }
+  ],
+  "connections": {
+    "Study Plan Webhook": { "main": [[{ "node": "Normalize Study Goal", "type": "main", "index": 0 }]] },
+    "Normalize Study Goal": { "main": [[{ "node": "Fetch Quiz History", "type": "main", "index": 0 }, { "node": "Fetch Existing Cards", "type": "main", "index": 0 }]] },
+    "Fetch Quiz History": { "main": [[{ "node": "Merge Study Context", "type": "main", "index": 0 }]] },
+    "Fetch Existing Cards": { "main": [[{ "node": "Merge Study Context", "type": "main", "index": 1 }]] },
+    "Merge Study Context": { "main": [[{ "node": "Study Planning Agent", "type": "main", "index": 0 }]] },
+    "Study Planning Agent": { "main": [[{ "node": "Validate Study Plan", "type": "main", "index": 0 }]] },
+    "Validate Study Plan": { "main": [[{ "node": "Needs Weak Area Push?", "type": "main", "index": 0 }]] },
+    "Needs Weak Area Push?": { "main": [[{ "node": "Send Weak Area Review", "type": "main", "index": 0 }], [{ "node": "Save New Cards", "type": "main", "index": 0 }]] },
+    "Send Weak Area Review": { "main": [[{ "node": "Write Study Audit", "type": "main", "index": 0 }]] },
+    "Save New Cards": { "main": [[{ "node": "Write Study Audit", "type": "main", "index": 0 }]] },
+    "Write Study Audit": { "main": [[{ "node": "Respond Study Plan", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "pinData": {},
+  "versionId": "40-study-spaced-repetition-agent"
+}

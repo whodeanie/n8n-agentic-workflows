@@ -1,0 +1,207 @@
+{
+  "name": "Home Workout Progression Agent",
+  "nodes": [
+    {
+      "id": "sticky-overview",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [80, 60],
+      "parameters": {
+        "content": "## Home Workout Progression Agent\n\nBuilds a conservative training week from goals, workout history, available equipment, and recovery flags.",
+        "height": 250,
+        "width": 430,
+        "color": 4
+      }
+    },
+    {
+      "id": "sticky-safety",
+      "name": "Training Safety Notes",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [80, 330],
+      "parameters": {
+        "content": "## Training controls\n\n. Injury and pain flags force review.\n. Progression stays conservative.\n. Plan must match available equipment.\n. Output is logged for next-cycle context.",
+        "height": 280,
+        "width": 430,
+        "color": 6
+      }
+    },
+    {
+      "id": "webhook",
+      "name": "Workout Plan Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [280, 320],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "personal/workout-progression",
+        "responseMode": "responseNode",
+        "options": {}
+      }
+    },
+    {
+      "id": "normalize",
+      "name": "Normalize Training Goal",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [520, 320],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const body = $json.body ?? $json;\nreturn [{ json: {\n  plan_id: body.plan_id ?? `workout-${Date.now()}`,\n  goal: body.goal ?? 'general strength and conditioning',\n  days_per_week: Number(body.days_per_week ?? 4),\n  session_minutes: Number(body.session_minutes ?? 45),\n  experience: body.experience ?? 'intermediate',\n  soreness: Number(body.soreness ?? 3),\n  injury_flags: body.injury_flags ?? [],\n  preferences: body.preferences ?? ['simple', 'progressive', 'home friendly']\n} }];"
+      }
+    },
+    {
+      "id": "history",
+      "name": "Fetch Workout History",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [760, 200],
+      "parameters": {
+        "operation": "read",
+        "documentId": { "__rl": true, "value": "<<TRAINING_SHEET_ID>>", "mode": "id" },
+        "sheetName": { "__rl": true, "value": "WorkoutHistory", "mode": "name" },
+        "options": {}
+      },
+      "credentials": { "googleSheetsOAuth2Api": { "id": "REPLACE_ME", "name": "Google Sheets" } }
+    },
+    {
+      "id": "equipment",
+      "name": "Fetch Equipment List",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [760, 440],
+      "parameters": {
+        "operation": "read",
+        "documentId": { "__rl": true, "value": "<<TRAINING_SHEET_ID>>", "mode": "id" },
+        "sheetName": { "__rl": true, "value": "Equipment", "mode": "name" },
+        "options": {}
+      },
+      "credentials": { "googleSheetsOAuth2Api": { "id": "REPLACE_ME", "name": "Google Sheets" } }
+    },
+    {
+      "id": "merge",
+      "name": "Merge Training Context",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [1000, 320],
+      "parameters": {
+        "mode": "combine",
+        "combinationMode": "mergeByPosition",
+        "options": {}
+      }
+    },
+    {
+      "id": "agent",
+      "name": "Workout Progression Agent",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [1240, 320],
+      "parameters": {
+        "resource": "chat",
+        "model": "gpt-4o",
+        "messages": {
+          "values": [
+            { "role": "system", "content": "You write conservative training plans. Return JSON only: {weekly_plan, progression_rule, recovery_notes, review_required, confidence, safety_flags}. Do not provide medical advice." },
+            { "role": "user", "content": "Goal: {{ JSON.stringify($('Normalize Training Goal').item.json) }}\nHistory and equipment: {{ JSON.stringify($json) }}" }
+          ]
+        },
+        "jsonOutput": true,
+        "options": { "temperature": 0.2 }
+      },
+      "credentials": { "openAiApi": { "id": "REPLACE_ME", "name": "OpenAI account" } }
+    },
+    {
+      "id": "shape",
+      "name": "Validate Workout Plan",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1480, 320],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const plan = $json.message?.content ?? $json;\nconst goal = $('Normalize Training Goal').item.json;\nconst safetyFlags = Array.isArray(plan.safety_flags) ? plan.safety_flags : [];\nreturn [{ json: { ...goal, plan: { ...plan, safety_flags: safetyFlags, confidence: Number(plan.confidence ?? 0), review_required: plan.review_required === true } } }];"
+      }
+    },
+    {
+      "id": "gate",
+      "name": "Needs Coach Review?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1720, 320],
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            { "leftValue": "={{ $json.injury_flags.length > 0 || $json.soreness >= 7 || $json.plan.review_required || $json.plan.confidence < 0.82 }}", "rightValue": true, "operator": { "type": "boolean", "operation": "equal" } }
+          ],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "review",
+      "name": "Send Coach Review",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.3,
+      "position": [1960, 220],
+      "parameters": {
+        "resource": "message",
+        "operation": "post",
+        "channel": "<<WORKOUT_REVIEW_CHANNEL_ID>>",
+        "text": "Workout plan needs review. Goal: {{ $json.goal }}. Safety flags: {{ JSON.stringify($json.plan.safety_flags) }}. Recovery: {{ $json.plan.recovery_notes }}"
+      },
+      "credentials": { "slackApi": { "id": "REPLACE_ME", "name": "Slack Bot" } }
+    },
+    {
+      "id": "save",
+      "name": "Save Training Plan",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [1960, 440],
+      "parameters": {
+        "operation": "append",
+        "documentId": { "__rl": true, "value": "<<TRAINING_SHEET_ID>>", "mode": "id" },
+        "sheetName": { "__rl": true, "value": "Plans", "mode": "name" },
+        "columns": { "mappingMode": "defineBelow", "value": { "ts": "={{ $now.toISO() }}", "plan_id": "={{ $json.plan_id }}", "weekly_plan": "={{ JSON.stringify($json.plan.weekly_plan) }}", "progression_rule": "={{ $json.plan.progression_rule }}" } }
+      },
+      "credentials": { "googleSheetsOAuth2Api": { "id": "REPLACE_ME", "name": "Google Sheets" } }
+    },
+    {
+      "id": "audit",
+      "name": "Write Workout Audit",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [2200, 320],
+      "parameters": {
+        "operation": "append",
+        "documentId": { "__rl": true, "value": "<<TRAINING_SHEET_ID>>", "mode": "id" },
+        "sheetName": { "__rl": true, "value": "PlanAudit", "mode": "name" },
+        "columns": { "mappingMode": "defineBelow", "value": { "ts": "={{ $now.toISO() }}", "plan_id": "={{ $('Normalize Training Goal').item.json.plan_id }}", "confidence": "={{ $('Validate Workout Plan').item.json.plan.confidence }}", "review": "={{ $('Validate Workout Plan').item.json.plan.review_required }}" } }
+      },
+      "credentials": { "googleSheetsOAuth2Api": { "id": "REPLACE_ME", "name": "Google Sheets" } }
+    },
+    {
+      "id": "respond",
+      "name": "Respond Workout Plan",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [2440, 320],
+      "parameters": { "options": {}, "respondWith": "allIncomingItems" }
+    }
+  ],
+  "connections": {
+    "Workout Plan Webhook": { "main": [[{ "node": "Normalize Training Goal", "type": "main", "index": 0 }]] },
+    "Normalize Training Goal": { "main": [[{ "node": "Fetch Workout History", "type": "main", "index": 0 }, { "node": "Fetch Equipment List", "type": "main", "index": 0 }]] },
+    "Fetch Workout History": { "main": [[{ "node": "Merge Training Context", "type": "main", "index": 0 }]] },
+    "Fetch Equipment List": { "main": [[{ "node": "Merge Training Context", "type": "main", "index": 1 }]] },
+    "Merge Training Context": { "main": [[{ "node": "Workout Progression Agent", "type": "main", "index": 0 }]] },
+    "Workout Progression Agent": { "main": [[{ "node": "Validate Workout Plan", "type": "main", "index": 0 }]] },
+    "Validate Workout Plan": { "main": [[{ "node": "Needs Coach Review?", "type": "main", "index": 0 }]] },
+    "Needs Coach Review?": { "main": [[{ "node": "Send Coach Review", "type": "main", "index": 0 }], [{ "node": "Save Training Plan", "type": "main", "index": 0 }]] },
+    "Send Coach Review": { "main": [[{ "node": "Write Workout Audit", "type": "main", "index": 0 }]] },
+    "Save Training Plan": { "main": [[{ "node": "Write Workout Audit", "type": "main", "index": 0 }]] },
+    "Write Workout Audit": { "main": [[{ "node": "Respond Workout Plan", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "pinData": {},
+  "versionId": "38-home-workout-progression-agent"
+}

@@ -18,7 +18,7 @@ Hiring managers, senior/principal engineers, automation teams, and technical ope
 
 ## Selected Workflows
 
-The added workflows cover lead enrichment, support escalation, idempotent webhooks, reconciliation, data migration, competitive monitoring, prompt evaluation, moderation, document understanding, research, tool use, code review summaries, procurement review, data-quality repair, revenue pipeline coaching, contract clause review, knowledge-base freshness, executive briefing, renewal-risk review, access review, invoice dispute handling, pantry meal prep, creator content remixing, fantasy sports waivers, and weekend planning.
+The added workflows cover lead enrichment, support escalation, idempotent webhooks, reconciliation, data migration, competitive monitoring, prompt evaluation, moderation, document understanding, research, tool use, code review summaries, procurement review, data-quality repair, revenue pipeline coaching, contract clause review, knowledge-base freshness, executive briefing, renewal-risk review, access review, invoice dispute handling, pantry meal prep, creator content remixing, fantasy sports waivers, weekend planning, workout progression, subscription savings, spaced repetition study, and travel packing.
 
 ## Validation
 
@@ -26,4 +26,4 @@ Validation should check JSON parseability, required n8n fields, minimum workflow
 
 ## Portfolio Framing
 
-The portfolio should describe the repo as a validated n8n workflow library and avoid implying these are hosted live services. The strongest claims are the measurable ones: thirty-seven workflow exports, TypeScript catalog generation, Python test coverage, CI validation, and clear import/setup docs.
+The portfolio should describe the repo as a validated n8n workflow library and avoid implying these are hosted live services. The strongest claims are the measurable ones: forty-one workflow exports, TypeScript catalog generation, Python test coverage, CI validation, and clear import/setup docs.

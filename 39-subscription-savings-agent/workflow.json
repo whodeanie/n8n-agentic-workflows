@@ -1,0 +1,195 @@
+{
+  "name": "Subscription Savings Agent",
+  "nodes": [
+    {
+      "id": "sticky-overview",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [80, 60],
+      "parameters": {
+        "content": "## Subscription Savings Agent\n\nFinds recurring charges, clusters subscriptions, estimates monthly savings, and builds a review checklist.",
+        "height": 250,
+        "width": 430,
+        "color": 4
+      }
+    },
+    {
+      "id": "sticky-money",
+      "name": "Money Review Notes",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [80, 330],
+      "parameters": {
+        "content": "## Money controls\n\n. Recommendations only.\n. Cancellation requires human review.\n. Cluster similar merchant names.\n. Preserve evidence for each charge.",
+        "height": 270,
+        "width": 430,
+        "color": 6
+      }
+    },
+    {
+      "id": "schedule",
+      "name": "Subscription Review Schedule",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [280, 320],
+      "parameters": {
+        "rule": { "interval": [{ "field": "months", "monthsInterval": 1 }] }
+      }
+    },
+    {
+      "id": "transactions",
+      "name": "Fetch Transactions",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [520, 220],
+      "parameters": {
+        "operation": "read",
+        "documentId": { "__rl": true, "value": "<<FINANCE_SHEET_ID>>", "mode": "id" },
+        "sheetName": { "__rl": true, "value": "Transactions", "mode": "name" },
+        "options": {}
+      },
+      "credentials": { "googleSheetsOAuth2Api": { "id": "REPLACE_ME", "name": "Google Sheets" } }
+    },
+    {
+      "id": "usage",
+      "name": "Fetch Usage Notes",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [520, 440],
+      "parameters": {
+        "operation": "read",
+        "documentId": { "__rl": true, "value": "<<FINANCE_SHEET_ID>>", "mode": "id" },
+        "sheetName": { "__rl": true, "value": "UsageNotes", "mode": "name" },
+        "options": {}
+      },
+      "credentials": { "googleSheetsOAuth2Api": { "id": "REPLACE_ME", "name": "Google Sheets" } }
+    },
+    {
+      "id": "merge",
+      "name": "Merge Money Signals",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [760, 320],
+      "parameters": {
+        "mode": "combine",
+        "combinationMode": "mergeByPosition",
+        "options": {}
+      }
+    },
+    {
+      "id": "detect",
+      "name": "Detect Recurring Charges",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1000, 320],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const rows = $input.all().map((item) => item.json);\nconst merchantCounts = new Map();\nfor (const row of rows) {\n  const merchant = String(row.merchant ?? row.description ?? 'unknown').toLowerCase().replace(/[^a-z0-9 ]/g, '').trim();\n  const amount = Number(row.amount ?? 0);\n  const key = `${merchant}:${Math.round(Math.abs(amount))}`;\n  merchantCounts.set(key, { merchant, amount: Math.abs(amount), count: (merchantCounts.get(key)?.count ?? 0) + 1 });\n}\nconst recurring = [...merchantCounts.values()].filter((entry) => entry.count >= 2);\nreturn [{ json: { recurring, source_rows: rows.length } }];"
+      }
+    },
+    {
+      "id": "agent",
+      "name": "Savings Review Agent",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [1240, 320],
+      "parameters": {
+        "resource": "chat",
+        "model": "gpt-4o",
+        "messages": {
+          "values": [
+            { "role": "system", "content": "You review recurring subscriptions. Return JSON only: {cancel_candidates, keep_candidates, watchlist, estimated_monthly_savings, confidence, review_notes}. Recommendations only, no financial advice." },
+            { "role": "user", "content": "Recurring charges and usage context: {{ JSON.stringify($json) }}" }
+          ]
+        },
+        "jsonOutput": true,
+        "options": { "temperature": 0.1 }
+      },
+      "credentials": { "openAiApi": { "id": "REPLACE_ME", "name": "OpenAI account" } }
+    },
+    {
+      "id": "shape",
+      "name": "Validate Savings Plan",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1480, 320],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const plan = $json.message?.content ?? $json;\nreturn [{ json: { plan: { ...plan, cancel_candidates: Array.isArray(plan.cancel_candidates) ? plan.cancel_candidates : [], watchlist: Array.isArray(plan.watchlist) ? plan.watchlist : [], estimated_monthly_savings: Number(plan.estimated_monthly_savings ?? 0), confidence: Number(plan.confidence ?? 0) } } }];"
+      }
+    },
+    {
+      "id": "gate",
+      "name": "Needs Cancel Review?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1720, 320],
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            { "leftValue": "={{ $json.plan.cancel_candidates.length > 0 || $json.plan.confidence < 0.86 }}", "rightValue": true, "operator": { "type": "boolean", "operation": "equal" } }
+          ],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "review",
+      "name": "Send Cancel Review",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.3,
+      "position": [1960, 220],
+      "parameters": {
+        "resource": "message",
+        "operation": "post",
+        "channel": "<<MONEY_REVIEW_CHANNEL_ID>>",
+        "text": "Subscription cleanup review. Est monthly savings: {{ $json.plan.estimated_monthly_savings }}. Cancel candidates: {{ JSON.stringify($json.plan.cancel_candidates) }}"
+      },
+      "credentials": { "slackApi": { "id": "REPLACE_ME", "name": "Slack Bot" } }
+    },
+    {
+      "id": "watchlist",
+      "name": "Save Watchlist",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [1960, 440],
+      "parameters": {
+        "operation": "append",
+        "documentId": { "__rl": true, "value": "<<FINANCE_SHEET_ID>>", "mode": "id" },
+        "sheetName": { "__rl": true, "value": "SubscriptionWatchlist", "mode": "name" },
+        "columns": { "mappingMode": "defineBelow", "value": { "ts": "={{ $now.toISO() }}", "watchlist": "={{ JSON.stringify($json.plan.watchlist) }}", "savings": "={{ $json.plan.estimated_monthly_savings }}" } }
+      },
+      "credentials": { "googleSheetsOAuth2Api": { "id": "REPLACE_ME", "name": "Google Sheets" } }
+    },
+    {
+      "id": "audit",
+      "name": "Write Savings Audit",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [2200, 320],
+      "parameters": {
+        "operation": "append",
+        "documentId": { "__rl": true, "value": "<<FINANCE_SHEET_ID>>", "mode": "id" },
+        "sheetName": { "__rl": true, "value": "SavingsAudit", "mode": "name" },
+        "columns": { "mappingMode": "defineBelow", "value": { "ts": "={{ $now.toISO() }}", "estimated_savings": "={{ $('Validate Savings Plan').item.json.plan.estimated_monthly_savings }}", "confidence": "={{ $('Validate Savings Plan').item.json.plan.confidence }}" } }
+      },
+      "credentials": { "googleSheetsOAuth2Api": { "id": "REPLACE_ME", "name": "Google Sheets" } }
+    }
+  ],
+  "connections": {
+    "Subscription Review Schedule": { "main": [[{ "node": "Fetch Transactions", "type": "main", "index": 0 }, { "node": "Fetch Usage Notes", "type": "main", "index": 0 }]] },
+    "Fetch Transactions": { "main": [[{ "node": "Merge Money Signals", "type": "main", "index": 0 }]] },
+    "Fetch Usage Notes": { "main": [[{ "node": "Merge Money Signals", "type": "main", "index": 1 }]] },
+    "Merge Money Signals": { "main": [[{ "node": "Detect Recurring Charges", "type": "main", "index": 0 }]] },
+    "Detect Recurring Charges": { "main": [[{ "node": "Savings Review Agent", "type": "main", "index": 0 }]] },
+    "Savings Review Agent": { "main": [[{ "node": "Validate Savings Plan", "type": "main", "index": 0 }]] },
+    "Validate Savings Plan": { "main": [[{ "node": "Needs Cancel Review?", "type": "main", "index": 0 }]] },
+    "Needs Cancel Review?": { "main": [[{ "node": "Send Cancel Review", "type": "main", "index": 0 }], [{ "node": "Save Watchlist", "type": "main", "index": 0 }]] },
+    "Send Cancel Review": { "main": [[{ "node": "Write Savings Audit", "type": "main", "index": 0 }]] },
+    "Save Watchlist": { "main": [[{ "node": "Write Savings Audit", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "pinData": {},
+  "versionId": "39-subscription-savings-agent"
+}
