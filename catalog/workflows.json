@@ -822,5 +822,87 @@
       "webhook"
     ],
     "workflowPath": "41-travel-packing-weather-agent/workflow.json"
+  },
+  {
+    "slug": "42-home-maintenance-seasonal-agent",
+    "name": "Home Maintenance Seasonal Agent",
+    "nodeCount": 14,
+    "stickyNoteCount": 2,
+    "triggerTypes": [
+      "scheduleTrigger"
+    ],
+    "integrationTypes": [
+      "code",
+      "googleSheets",
+      "httpRequest",
+      "if",
+      "merge",
+      "openAi",
+      "scheduleTrigger",
+      "slack"
+    ],
+    "workflowPath": "42-home-maintenance-seasonal-agent/workflow.json"
+  },
+  {
+    "slug": "43-reading-watchlist-curator-agent",
+    "name": "Reading Watchlist Curator Agent",
+    "nodeCount": 12,
+    "stickyNoteCount": 2,
+    "triggerTypes": [
+      "scheduleTrigger"
+    ],
+    "integrationTypes": [
+      "code",
+      "googleSheets",
+      "if",
+      "merge",
+      "openAi",
+      "scheduleTrigger",
+      "slack"
+    ],
+    "workflowPath": "43-reading-watchlist-curator-agent/workflow.json"
+  },
+  {
+    "slug": "44-outfit-weather-planner-agent",
+    "name": "Outfit Weather Planner Agent",
+    "nodeCount": 16,
+    "stickyNoteCount": 2,
+    "triggerTypes": [
+      "webhook"
+    ],
+    "integrationTypes": [
+      "code",
+      "googleCalendar",
+      "googleSheets",
+      "httpRequest",
+      "if",
+      "merge",
+      "openAi",
+      "respondToWebhook",
+      "slack",
+      "webhook"
+    ],
+    "workflowPath": "44-outfit-weather-planner-agent/workflow.json"
+  },
+  {
+    "slug": "45-personal-digest-priority-agent",
+    "name": "Personal Digest Priority Agent",
+    "nodeCount": 14,
+    "stickyNoteCount": 2,
+    "triggerTypes": [
+      "scheduleTrigger"
+    ],
+    "integrationTypes": [
+      "code",
+      "gmail",
+      "googleCalendar",
+      "googleSheets",
+      "if",
+      "merge",
+      "openAi",
+      "scheduleTrigger",
+      "slack"
+    ],
+    "workflowPath": "45-personal-digest-priority-agent/workflow.json"
   }
 ]

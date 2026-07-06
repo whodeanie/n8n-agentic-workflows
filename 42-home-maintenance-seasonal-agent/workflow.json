@@ -1,0 +1,209 @@
+{
+  "name": "Home Maintenance Seasonal Agent",
+  "nodes": [
+    {
+      "id": "sticky-overview",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [80, 60],
+      "parameters": {
+        "content": "## Home Maintenance Seasonal Agent\n\nBuilds a seasonal maintenance checklist from home profile, weather, warranties, and prior task history.",
+        "height": 250,
+        "width": 430,
+        "color": 4
+      }
+    },
+    {
+      "id": "sticky-controls",
+      "name": "Maintenance Notes",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [80, 330],
+      "parameters": {
+        "content": "## Maintenance controls\n\n. Safety risks route to review.\n. Contractor tasks are separate from DIY tasks.\n. Weather affects timing.\n. Audit preserves what changed each season.",
+        "height": 280,
+        "width": 430,
+        "color": 6
+      }
+    },
+    {
+      "id": "schedule",
+      "name": "Maintenance Schedule",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [280, 320],
+      "parameters": {
+        "rule": { "interval": [{ "field": "months", "monthsInterval": 1 }] }
+      }
+    },
+    {
+      "id": "profile",
+      "name": "Fetch Home Profile",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [520, 180],
+      "parameters": {
+        "operation": "read",
+        "documentId": { "__rl": true, "value": "<<HOME_SHEET_ID>>", "mode": "id" },
+        "sheetName": { "__rl": true, "value": "HomeProfile", "mode": "name" },
+        "options": {}
+      },
+      "credentials": { "googleSheetsOAuth2Api": { "id": "REPLACE_ME", "name": "Google Sheets" } }
+    },
+    {
+      "id": "weather",
+      "name": "Fetch Seasonal Weather",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [520, 320],
+      "parameters": {
+        "method": "GET",
+        "url": "https://weather.example.com/seasonal?location=home",
+        "options": {}
+      }
+    },
+    {
+      "id": "warranty",
+      "name": "Fetch Warranty Notes",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [520, 460],
+      "parameters": {
+        "operation": "read",
+        "documentId": { "__rl": true, "value": "<<HOME_SHEET_ID>>", "mode": "id" },
+        "sheetName": { "__rl": true, "value": "Warranties", "mode": "name" },
+        "options": {}
+      },
+      "credentials": { "googleSheetsOAuth2Api": { "id": "REPLACE_ME", "name": "Google Sheets" } }
+    },
+    {
+      "id": "merge-weather",
+      "name": "Merge Profile And Weather",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [760, 250],
+      "parameters": {
+        "mode": "combine",
+        "combinationMode": "mergeByPosition",
+        "options": {}
+      }
+    },
+    {
+      "id": "merge-all",
+      "name": "Merge Maintenance Context",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [1000, 320],
+      "parameters": {
+        "mode": "combine",
+        "combinationMode": "mergeByPosition",
+        "options": {}
+      }
+    },
+    {
+      "id": "agent",
+      "name": "Maintenance Planning Agent",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [1240, 320],
+      "parameters": {
+        "resource": "chat",
+        "model": "gpt-4o",
+        "messages": {
+          "values": [
+            { "role": "system", "content": "You create home maintenance plans. Return JSON only: {diy_tasks, contractor_tasks, safety_flags, seasonal_timing, estimated_cost, confidence, summary}." },
+            { "role": "user", "content": "Home, weather, and warranty context: {{ JSON.stringify($json) }}" }
+          ]
+        },
+        "jsonOutput": true,
+        "options": { "temperature": 0.15 }
+      },
+      "credentials": { "openAiApi": { "id": "REPLACE_ME", "name": "OpenAI account" } }
+    },
+    {
+      "id": "shape",
+      "name": "Validate Maintenance Plan",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1480, 320],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const plan = $json.message?.content ?? $json;\nreturn [{ json: { plan: { ...plan, diy_tasks: Array.isArray(plan.diy_tasks) ? plan.diy_tasks : [], contractor_tasks: Array.isArray(plan.contractor_tasks) ? plan.contractor_tasks : [], safety_flags: Array.isArray(plan.safety_flags) ? plan.safety_flags : [], estimated_cost: Number(plan.estimated_cost ?? 0), confidence: Number(plan.confidence ?? 0) } } }];"
+      }
+    },
+    {
+      "id": "gate",
+      "name": "Needs Contractor Review?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1720, 320],
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            { "leftValue": "={{ $json.plan.contractor_tasks.length > 0 || $json.plan.safety_flags.length > 0 || $json.plan.confidence < 0.82 }}", "rightValue": true, "operator": { "type": "boolean", "operation": "equal" } }
+          ],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "review",
+      "name": "Send Contractor Review",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.3,
+      "position": [1960, 220],
+      "parameters": {
+        "resource": "message",
+        "operation": "post",
+        "channel": "<<HOME_MAINTENANCE_CHANNEL_ID>>",
+        "text": "Home maintenance review needed. Contractor tasks: {{ JSON.stringify($json.plan.contractor_tasks) }}. Safety flags: {{ JSON.stringify($json.plan.safety_flags) }}"
+      },
+      "credentials": { "slackApi": { "id": "REPLACE_ME", "name": "Slack Bot" } }
+    },
+    {
+      "id": "save",
+      "name": "Save DIY Checklist",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [1960, 440],
+      "parameters": {
+        "operation": "append",
+        "documentId": { "__rl": true, "value": "<<HOME_SHEET_ID>>", "mode": "id" },
+        "sheetName": { "__rl": true, "value": "MaintenanceTasks", "mode": "name" },
+        "columns": { "mappingMode": "defineBelow", "value": { "ts": "={{ $now.toISO() }}", "tasks": "={{ JSON.stringify($json.plan.diy_tasks) }}", "timing": "={{ JSON.stringify($json.plan.seasonal_timing) }}" } }
+      },
+      "credentials": { "googleSheetsOAuth2Api": { "id": "REPLACE_ME", "name": "Google Sheets" } }
+    },
+    {
+      "id": "audit",
+      "name": "Write Maintenance Audit",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [2200, 320],
+      "parameters": {
+        "operation": "append",
+        "documentId": { "__rl": true, "value": "<<HOME_SHEET_ID>>", "mode": "id" },
+        "sheetName": { "__rl": true, "value": "MaintenanceAudit", "mode": "name" },
+        "columns": { "mappingMode": "defineBelow", "value": { "ts": "={{ $now.toISO() }}", "cost": "={{ $('Validate Maintenance Plan').item.json.plan.estimated_cost }}", "confidence": "={{ $('Validate Maintenance Plan').item.json.plan.confidence }}" } }
+      },
+      "credentials": { "googleSheetsOAuth2Api": { "id": "REPLACE_ME", "name": "Google Sheets" } }
+    }
+  ],
+  "connections": {
+    "Maintenance Schedule": { "main": [[{ "node": "Fetch Home Profile", "type": "main", "index": 0 }, { "node": "Fetch Seasonal Weather", "type": "main", "index": 0 }, { "node": "Fetch Warranty Notes", "type": "main", "index": 0 }]] },
+    "Fetch Home Profile": { "main": [[{ "node": "Merge Profile And Weather", "type": "main", "index": 0 }]] },
+    "Fetch Seasonal Weather": { "main": [[{ "node": "Merge Profile And Weather", "type": "main", "index": 1 }]] },
+    "Merge Profile And Weather": { "main": [[{ "node": "Merge Maintenance Context", "type": "main", "index": 0 }]] },
+    "Fetch Warranty Notes": { "main": [[{ "node": "Merge Maintenance Context", "type": "main", "index": 1 }]] },
+    "Merge Maintenance Context": { "main": [[{ "node": "Maintenance Planning Agent", "type": "main", "index": 0 }]] },
+    "Maintenance Planning Agent": { "main": [[{ "node": "Validate Maintenance Plan", "type": "main", "index": 0 }]] },
+    "Validate Maintenance Plan": { "main": [[{ "node": "Needs Contractor Review?", "type": "main", "index": 0 }]] },
+    "Needs Contractor Review?": { "main": [[{ "node": "Send Contractor Review", "type": "main", "index": 0 }], [{ "node": "Save DIY Checklist", "type": "main", "index": 0 }]] },
+    "Send Contractor Review": { "main": [[{ "node": "Write Maintenance Audit", "type": "main", "index": 0 }]] },
+    "Save DIY Checklist": { "main": [[{ "node": "Write Maintenance Audit", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "pinData": {},
+  "versionId": "42-home-maintenance-seasonal-agent"
+}

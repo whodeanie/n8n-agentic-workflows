@@ -1,0 +1,183 @@
+{
+  "name": "Reading Watchlist Curator Agent",
+  "nodes": [
+    {
+      "id": "sticky-overview",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [80, 60],
+      "parameters": {
+        "content": "## Reading Watchlist Curator Agent\n\nRanks saved links, articles, books, movies, and shows into a focused queue with reasons and archive suggestions.",
+        "height": 250,
+        "width": 430,
+        "color": 4
+      }
+    },
+    {
+      "id": "sticky-curation",
+      "name": "Curation Notes",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [80, 330],
+      "parameters": {
+        "content": "## Curation controls\n\n. Dedupe before ranking.\n. Keep why it matters.\n. Archive stale or off-theme items.\n. Queue stays short enough to use.",
+        "height": 270,
+        "width": 430,
+        "color": 6
+      }
+    },
+    {
+      "id": "schedule",
+      "name": "Reading Queue Schedule",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [280, 320],
+      "parameters": {
+        "rule": { "interval": [{ "field": "weeks", "weeksInterval": 1 }] }
+      }
+    },
+    {
+      "id": "links",
+      "name": "Fetch Saved Links",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [520, 220],
+      "parameters": {
+        "operation": "read",
+        "documentId": { "__rl": true, "value": "<<READING_SHEET_ID>>", "mode": "id" },
+        "sheetName": { "__rl": true, "value": "SavedLinks", "mode": "name" },
+        "options": {}
+      },
+      "credentials": { "googleSheetsOAuth2Api": { "id": "REPLACE_ME", "name": "Google Sheets" } }
+    },
+    {
+      "id": "prefs",
+      "name": "Fetch Preference Notes",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [520, 440],
+      "parameters": {
+        "operation": "read",
+        "documentId": { "__rl": true, "value": "<<READING_SHEET_ID>>", "mode": "id" },
+        "sheetName": { "__rl": true, "value": "Preferences", "mode": "name" },
+        "options": {}
+      },
+      "credentials": { "googleSheetsOAuth2Api": { "id": "REPLACE_ME", "name": "Google Sheets" } }
+    },
+    {
+      "id": "merge",
+      "name": "Merge Queue Context",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [760, 320],
+      "parameters": {
+        "mode": "combine",
+        "combinationMode": "mergeByPosition",
+        "options": {}
+      }
+    },
+    {
+      "id": "agent",
+      "name": "Reading Curator Agent",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [1000, 320],
+      "parameters": {
+        "resource": "chat",
+        "model": "gpt-4o",
+        "messages": {
+          "values": [
+            { "role": "system", "content": "You curate reading and watch queues. Return JSON only: {top_queue, archive_suggestions, duplicates, summaries, confidence, rationale}. Keep top_queue useful and short." },
+            { "role": "user", "content": "Saved links and preferences: {{ JSON.stringify($json) }}" }
+          ]
+        },
+        "jsonOutput": true,
+        "options": { "temperature": 0.2 }
+      },
+      "credentials": { "openAiApi": { "id": "REPLACE_ME", "name": "OpenAI account" } }
+    },
+    {
+      "id": "shape",
+      "name": "Validate Curated Queue",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1240, 320],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const result = $json.message?.content ?? $json;\nreturn [{ json: { queue: { ...result, top_queue: Array.isArray(result.top_queue) ? result.top_queue.slice(0, 10) : [], archive_suggestions: Array.isArray(result.archive_suggestions) ? result.archive_suggestions : [], duplicates: Array.isArray(result.duplicates) ? result.duplicates : [], confidence: Number(result.confidence ?? 0) } } }];"
+      }
+    },
+    {
+      "id": "gate",
+      "name": "Enough Queue Confidence?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1480, 320],
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            { "leftValue": "={{ $json.queue.confidence >= 0.82 && $json.queue.top_queue.length > 0 }}", "rightValue": true, "operator": { "type": "boolean", "operation": "equal" } }
+          ],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "post",
+      "name": "Post Weekend Queue",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.3,
+      "position": [1720, 220],
+      "parameters": {
+        "resource": "message",
+        "operation": "post",
+        "channel": "<<READING_QUEUE_CHANNEL_ID>>",
+        "text": "Weekend queue: {{ JSON.stringify($json.queue.top_queue) }}\nWhy: {{ $json.queue.rationale }}"
+      },
+      "credentials": { "slackApi": { "id": "REPLACE_ME", "name": "Slack Bot" } }
+    },
+    {
+      "id": "review",
+      "name": "Send Queue Review",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.3,
+      "position": [1720, 440],
+      "parameters": {
+        "resource": "message",
+        "operation": "post",
+        "channel": "<<READING_QUEUE_CHANNEL_ID>>",
+        "text": "Reading queue needs review. Duplicates: {{ JSON.stringify($json.queue.duplicates) }}. Archive suggestions: {{ JSON.stringify($json.queue.archive_suggestions) }}"
+      },
+      "credentials": { "slackApi": { "id": "REPLACE_ME", "name": "Slack Bot" } }
+    },
+    {
+      "id": "audit",
+      "name": "Write Queue Audit",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [1960, 320],
+      "parameters": {
+        "operation": "append",
+        "documentId": { "__rl": true, "value": "<<READING_SHEET_ID>>", "mode": "id" },
+        "sheetName": { "__rl": true, "value": "QueueAudit", "mode": "name" },
+        "columns": { "mappingMode": "defineBelow", "value": { "ts": "={{ $now.toISO() }}", "queue": "={{ JSON.stringify($('Validate Curated Queue').item.json.queue.top_queue) }}", "confidence": "={{ $('Validate Curated Queue').item.json.queue.confidence }}" } }
+      },
+      "credentials": { "googleSheetsOAuth2Api": { "id": "REPLACE_ME", "name": "Google Sheets" } }
+    }
+  ],
+  "connections": {
+    "Reading Queue Schedule": { "main": [[{ "node": "Fetch Saved Links", "type": "main", "index": 0 }, { "node": "Fetch Preference Notes", "type": "main", "index": 0 }]] },
+    "Fetch Saved Links": { "main": [[{ "node": "Merge Queue Context", "type": "main", "index": 0 }]] },
+    "Fetch Preference Notes": { "main": [[{ "node": "Merge Queue Context", "type": "main", "index": 1 }]] },
+    "Merge Queue Context": { "main": [[{ "node": "Reading Curator Agent", "type": "main", "index": 0 }]] },
+    "Reading Curator Agent": { "main": [[{ "node": "Validate Curated Queue", "type": "main", "index": 0 }]] },
+    "Validate Curated Queue": { "main": [[{ "node": "Enough Queue Confidence?", "type": "main", "index": 0 }]] },
+    "Enough Queue Confidence?": { "main": [[{ "node": "Post Weekend Queue", "type": "main", "index": 0 }], [{ "node": "Send Queue Review", "type": "main", "index": 0 }]] },
+    "Post Weekend Queue": { "main": [[{ "node": "Write Queue Audit", "type": "main", "index": 0 }]] },
+    "Send Queue Review": { "main": [[{ "node": "Write Queue Audit", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "pinData": {},
+  "versionId": "43-reading-watchlist-curator-agent"
+}

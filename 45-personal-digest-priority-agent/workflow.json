@@ -1,0 +1,212 @@
+{
+  "name": "Personal Digest Priority Agent",
+  "nodes": [
+    {
+      "id": "sticky-overview",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [80, 60],
+      "parameters": {
+        "content": "## Personal Digest Priority Agent\n\nCombines inbox, calendar, tasks, and saved links into one prioritized daily digest with urgent alerts.",
+        "height": 250,
+        "width": 430,
+        "color": 4
+      }
+    },
+    {
+      "id": "sticky-priority",
+      "name": "Priority Notes",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [80, 330],
+      "parameters": {
+        "content": "## Digest controls\n\n. Urgent actions become alerts.\n. Informational items stay in digest.\n. Every action keeps a source reference.\n. Low-confidence extraction routes to review.",
+        "height": 280,
+        "width": 430,
+        "color": 6
+      }
+    },
+    {
+      "id": "schedule",
+      "name": "Daily Digest Schedule",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [280, 320],
+      "parameters": {
+        "rule": { "interval": [{ "field": "days", "daysInterval": 1 }] }
+      }
+    },
+    {
+      "id": "gmail",
+      "name": "Fetch Inbox Signals",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [520, 160],
+      "parameters": {
+        "resource": "message",
+        "operation": "getAll",
+        "returnAll": false,
+        "limit": 25,
+        "filters": { "labelIds": ["INBOX"] }
+      },
+      "credentials": { "gmailOAuth2": { "id": "REPLACE_ME", "name": "Gmail account" } }
+    },
+    {
+      "id": "calendar",
+      "name": "Fetch Calendar",
+      "type": "n8n-nodes-base.googleCalendar",
+      "typeVersion": 1.2,
+      "position": [520, 320],
+      "parameters": {
+        "calendar": { "__rl": true, "value": "<<CALENDAR_ID>>", "mode": "id" },
+        "timeMin": "={{ $now.startOf('day').toISO() }}",
+        "timeMax": "={{ $now.plus({ days: 1 }).startOf('day').toISO() }}",
+        "options": {}
+      },
+      "credentials": { "googleCalendarOAuth2Api": { "id": "REPLACE_ME", "name": "Google Calendar" } }
+    },
+    {
+      "id": "tasks",
+      "name": "Fetch Task List",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [520, 480],
+      "parameters": {
+        "operation": "read",
+        "documentId": { "__rl": true, "value": "<<PERSONAL_DASHBOARD_SHEET_ID>>", "mode": "id" },
+        "sheetName": { "__rl": true, "value": "Tasks", "mode": "name" },
+        "options": {}
+      },
+      "credentials": { "googleSheetsOAuth2Api": { "id": "REPLACE_ME", "name": "Google Sheets" } }
+    },
+    {
+      "id": "merge-inbox-calendar",
+      "name": "Merge Inbox And Calendar",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [760, 240],
+      "parameters": {
+        "mode": "combine",
+        "combinationMode": "mergeByPosition",
+        "options": {}
+      }
+    },
+    {
+      "id": "merge-all",
+      "name": "Merge Daily Signals",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [1000, 320],
+      "parameters": {
+        "mode": "combine",
+        "combinationMode": "mergeByPosition",
+        "options": {}
+      }
+    },
+    {
+      "id": "agent",
+      "name": "Digest Priority Agent",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [1240, 320],
+      "parameters": {
+        "resource": "chat",
+        "model": "gpt-4o",
+        "messages": {
+          "values": [
+            { "role": "system", "content": "You create personal daily digests. Return JSON only: {urgent_actions, today_plan, waiting_on, informational_items, source_refs, confidence, digest_text}. Keep urgent and informational separate." },
+            { "role": "user", "content": "Inbox, calendar, and task signals: {{ JSON.stringify($json) }}" }
+          ]
+        },
+        "jsonOutput": true,
+        "options": { "temperature": 0.12 }
+      },
+      "credentials": { "openAiApi": { "id": "REPLACE_ME", "name": "OpenAI account" } }
+    },
+    {
+      "id": "shape",
+      "name": "Validate Digest",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1480, 320],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const digest = $json.message?.content ?? $json;\nreturn [{ json: { digest: { ...digest, urgent_actions: Array.isArray(digest.urgent_actions) ? digest.urgent_actions : [], informational_items: Array.isArray(digest.informational_items) ? digest.informational_items : [], source_refs: Array.isArray(digest.source_refs) ? digest.source_refs : [], confidence: Number(digest.confidence ?? 0) } } }];"
+      }
+    },
+    {
+      "id": "gate",
+      "name": "Has Urgent Actions?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1720, 320],
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            { "leftValue": "={{ $json.digest.urgent_actions.length > 0 || $json.digest.confidence < 0.82 }}", "rightValue": true, "operator": { "type": "boolean", "operation": "equal" } }
+          ],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "alert",
+      "name": "Post Priority Alert",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.3,
+      "position": [1960, 220],
+      "parameters": {
+        "resource": "message",
+        "operation": "post",
+        "channel": "<<PERSONAL_DIGEST_CHANNEL_ID>>",
+        "text": "Priority actions: {{ JSON.stringify($json.digest.urgent_actions) }}\nSources: {{ JSON.stringify($json.digest.source_refs) }}"
+      },
+      "credentials": { "slackApi": { "id": "REPLACE_ME", "name": "Slack Bot" } }
+    },
+    {
+      "id": "digest",
+      "name": "Post Morning Digest",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.3,
+      "position": [1960, 440],
+      "parameters": {
+        "resource": "message",
+        "operation": "post",
+        "channel": "<<PERSONAL_DIGEST_CHANNEL_ID>>",
+        "text": "{{ $json.digest.digest_text }}"
+      },
+      "credentials": { "slackApi": { "id": "REPLACE_ME", "name": "Slack Bot" } }
+    },
+    {
+      "id": "audit",
+      "name": "Write Digest Audit",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [2200, 320],
+      "parameters": {
+        "operation": "append",
+        "documentId": { "__rl": true, "value": "<<PERSONAL_DASHBOARD_SHEET_ID>>", "mode": "id" },
+        "sheetName": { "__rl": true, "value": "DigestAudit", "mode": "name" },
+        "columns": { "mappingMode": "defineBelow", "value": { "ts": "={{ $now.toISO() }}", "urgent_count": "={{ $('Validate Digest').item.json.digest.urgent_actions.length }}", "confidence": "={{ $('Validate Digest').item.json.digest.confidence }}" } }
+      },
+      "credentials": { "googleSheetsOAuth2Api": { "id": "REPLACE_ME", "name": "Google Sheets" } }
+    }
+  ],
+  "connections": {
+    "Daily Digest Schedule": { "main": [[{ "node": "Fetch Inbox Signals", "type": "main", "index": 0 }, { "node": "Fetch Calendar", "type": "main", "index": 0 }, { "node": "Fetch Task List", "type": "main", "index": 0 }]] },
+    "Fetch Inbox Signals": { "main": [[{ "node": "Merge Inbox And Calendar", "type": "main", "index": 0 }]] },
+    "Fetch Calendar": { "main": [[{ "node": "Merge Inbox And Calendar", "type": "main", "index": 1 }]] },
+    "Merge Inbox And Calendar": { "main": [[{ "node": "Merge Daily Signals", "type": "main", "index": 0 }]] },
+    "Fetch Task List": { "main": [[{ "node": "Merge Daily Signals", "type": "main", "index": 1 }]] },
+    "Merge Daily Signals": { "main": [[{ "node": "Digest Priority Agent", "type": "main", "index": 0 }]] },
+    "Digest Priority Agent": { "main": [[{ "node": "Validate Digest", "type": "main", "index": 0 }]] },
+    "Validate Digest": { "main": [[{ "node": "Has Urgent Actions?", "type": "main", "index": 0 }]] },
+    "Has Urgent Actions?": { "main": [[{ "node": "Post Priority Alert", "type": "main", "index": 0 }], [{ "node": "Post Morning Digest", "type": "main", "index": 0 }]] },
+    "Post Priority Alert": { "main": [[{ "node": "Write Digest Audit", "type": "main", "index": 0 }]] },
+    "Post Morning Digest": { "main": [[{ "node": "Write Digest Audit", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "pinData": {},
+  "versionId": "45-personal-digest-priority-agent"
+}

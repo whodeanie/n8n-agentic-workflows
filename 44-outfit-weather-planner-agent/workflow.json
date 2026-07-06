@@ -1,0 +1,233 @@
+{
+  "name": "Outfit Weather Planner Agent",
+  "nodes": [
+    {
+      "id": "sticky-overview",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [80, 60],
+      "parameters": {
+        "content": "## Outfit Weather Planner Agent\n\nMatches weather, calendar events, dress code, and wardrobe inventory into practical outfit recommendations.",
+        "height": 250,
+        "width": 430,
+        "color": 4
+      }
+    },
+    {
+      "id": "sticky-style",
+      "name": "Style Notes",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [80, 330],
+      "parameters": {
+        "content": "## Style controls\n\n. Recommend only owned wardrobe items.\n. Weather and dress code are hard inputs.\n. Include a backup option.\n. Missing items route to review.",
+        "height": 270,
+        "width": 430,
+        "color": 6
+      }
+    },
+    {
+      "id": "webhook",
+      "name": "Outfit Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [280, 320],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "personal/outfit-weather",
+        "responseMode": "responseNode",
+        "options": {}
+      }
+    },
+    {
+      "id": "normalize",
+      "name": "Normalize Day Context",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [520, 320],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const body = $json.body ?? $json;\nreturn [{ json: {\n  outfit_id: body.outfit_id ?? `outfit-${Date.now()}`,\n  date: body.date ?? new Date().toISOString().slice(0, 10),\n  location: body.location ?? 'home',\n  dress_code: body.dress_code ?? 'casual polished',\n  comfort_priority: body.comfort_priority ?? 'medium',\n  avoid: body.avoid ?? []\n} }];"
+      }
+    },
+    {
+      "id": "weather",
+      "name": "Fetch Day Weather",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [760, 160],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ `https://weather.example.com/day?location=${encodeURIComponent($json.location)}&date=${$json.date}` }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "calendar",
+      "name": "Fetch Calendar Events",
+      "type": "n8n-nodes-base.googleCalendar",
+      "typeVersion": 1.2,
+      "position": [760, 320],
+      "parameters": {
+        "calendar": { "__rl": true, "value": "<<CALENDAR_ID>>", "mode": "id" },
+        "timeMin": "={{ $json.date }}T00:00:00",
+        "timeMax": "={{ $json.date }}T23:59:59",
+        "options": {}
+      },
+      "credentials": { "googleCalendarOAuth2Api": { "id": "REPLACE_ME", "name": "Google Calendar" } }
+    },
+    {
+      "id": "wardrobe",
+      "name": "Fetch Wardrobe",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [760, 480],
+      "parameters": {
+        "operation": "read",
+        "documentId": { "__rl": true, "value": "<<WARDROBE_SHEET_ID>>", "mode": "id" },
+        "sheetName": { "__rl": true, "value": "Wardrobe", "mode": "name" },
+        "options": {}
+      },
+      "credentials": { "googleSheetsOAuth2Api": { "id": "REPLACE_ME", "name": "Google Sheets" } }
+    },
+    {
+      "id": "merge-day",
+      "name": "Merge Weather And Calendar",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [1000, 240],
+      "parameters": {
+        "mode": "combine",
+        "combinationMode": "mergeByPosition",
+        "options": {}
+      }
+    },
+    {
+      "id": "merge-all",
+      "name": "Merge Outfit Context",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [1240, 320],
+      "parameters": {
+        "mode": "combine",
+        "combinationMode": "mergeByPosition",
+        "options": {}
+      }
+    },
+    {
+      "id": "agent",
+      "name": "Outfit Planning Agent",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [1480, 320],
+      "parameters": {
+        "resource": "chat",
+        "model": "gpt-4o",
+        "messages": {
+          "values": [
+            { "role": "system", "content": "You create outfit recommendations from owned items only. Return JSON only: {primary_outfit, backup_outfit, missing_items, weather_notes, dress_code_fit, confidence, rationale}." },
+            { "role": "user", "content": "Day context: {{ JSON.stringify($('Normalize Day Context').item.json) }}\nWeather, calendar, and wardrobe: {{ JSON.stringify($json) }}" }
+          ]
+        },
+        "jsonOutput": true,
+        "options": { "temperature": 0.25 }
+      },
+      "credentials": { "openAiApi": { "id": "REPLACE_ME", "name": "OpenAI account" } }
+    },
+    {
+      "id": "shape",
+      "name": "Validate Outfit",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1720, 320],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const outfit = $json.message?.content ?? $json;\nconst context = $('Normalize Day Context').item.json;\nreturn [{ json: { ...context, outfit: { ...outfit, missing_items: Array.isArray(outfit.missing_items) ? outfit.missing_items : [], confidence: Number(outfit.confidence ?? 0) } } }];"
+      }
+    },
+    {
+      "id": "gate",
+      "name": "Needs Outfit Review?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1960, 320],
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            { "leftValue": "={{ $json.outfit.missing_items.length > 0 || $json.outfit.confidence < 0.82 }}", "rightValue": true, "operator": { "type": "boolean", "operation": "equal" } }
+          ],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "review",
+      "name": "Send Outfit Review",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.3,
+      "position": [2200, 220],
+      "parameters": {
+        "resource": "message",
+        "operation": "post",
+        "channel": "<<OUTFIT_CHANNEL_ID>>",
+        "text": "Outfit needs review. Missing items: {{ JSON.stringify($json.outfit.missing_items) }}. Notes: {{ $json.outfit.weather_notes }}"
+      },
+      "credentials": { "slackApi": { "id": "REPLACE_ME", "name": "Slack Bot" } }
+    },
+    {
+      "id": "save",
+      "name": "Save Outfit Plan",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [2200, 440],
+      "parameters": {
+        "operation": "append",
+        "documentId": { "__rl": true, "value": "<<WARDROBE_SHEET_ID>>", "mode": "id" },
+        "sheetName": { "__rl": true, "value": "OutfitPlans", "mode": "name" },
+        "columns": { "mappingMode": "defineBelow", "value": { "ts": "={{ $now.toISO() }}", "date": "={{ $json.date }}", "primary": "={{ JSON.stringify($json.outfit.primary_outfit) }}", "backup": "={{ JSON.stringify($json.outfit.backup_outfit) }}" } }
+      },
+      "credentials": { "googleSheetsOAuth2Api": { "id": "REPLACE_ME", "name": "Google Sheets" } }
+    },
+    {
+      "id": "audit",
+      "name": "Write Outfit Audit",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [2440, 320],
+      "parameters": {
+        "operation": "append",
+        "documentId": { "__rl": true, "value": "<<WARDROBE_SHEET_ID>>", "mode": "id" },
+        "sheetName": { "__rl": true, "value": "OutfitAudit", "mode": "name" },
+        "columns": { "mappingMode": "defineBelow", "value": { "ts": "={{ $now.toISO() }}", "outfit_id": "={{ $('Normalize Day Context').item.json.outfit_id }}", "confidence": "={{ $('Validate Outfit').item.json.outfit.confidence }}" } }
+      },
+      "credentials": { "googleSheetsOAuth2Api": { "id": "REPLACE_ME", "name": "Google Sheets" } }
+    },
+    {
+      "id": "respond",
+      "name": "Respond Outfit Plan",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [2680, 320],
+      "parameters": { "options": {}, "respondWith": "allIncomingItems" }
+    }
+  ],
+  "connections": {
+    "Outfit Webhook": { "main": [[{ "node": "Normalize Day Context", "type": "main", "index": 0 }]] },
+    "Normalize Day Context": { "main": [[{ "node": "Fetch Day Weather", "type": "main", "index": 0 }, { "node": "Fetch Calendar Events", "type": "main", "index": 0 }, { "node": "Fetch Wardrobe", "type": "main", "index": 0 }]] },
+    "Fetch Day Weather": { "main": [[{ "node": "Merge Weather And Calendar", "type": "main", "index": 0 }]] },
+    "Fetch Calendar Events": { "main": [[{ "node": "Merge Weather And Calendar", "type": "main", "index": 1 }]] },
+    "Merge Weather And Calendar": { "main": [[{ "node": "Merge Outfit Context", "type": "main", "index": 0 }]] },
+    "Fetch Wardrobe": { "main": [[{ "node": "Merge Outfit Context", "type": "main", "index": 1 }]] },
+    "Merge Outfit Context": { "main": [[{ "node": "Outfit Planning Agent", "type": "main", "index": 0 }]] },
+    "Outfit Planning Agent": { "main": [[{ "node": "Validate Outfit", "type": "main", "index": 0 }]] },
+    "Validate Outfit": { "main": [[{ "node": "Needs Outfit Review?", "type": "main", "index": 0 }]] },
+    "Needs Outfit Review?": { "main": [[{ "node": "Send Outfit Review", "type": "main", "index": 0 }], [{ "node": "Save Outfit Plan", "type": "main", "index": 0 }]] },
+    "Send Outfit Review": { "main": [[{ "node": "Write Outfit Audit", "type": "main", "index": 0 }]] },
+    "Save Outfit Plan": { "main": [[{ "node": "Write Outfit Audit", "type": "main", "index": 0 }]] },
+    "Write Outfit Audit": { "main": [[{ "node": "Respond Outfit Plan", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "pinData": {},
+  "versionId": "44-outfit-weather-planner-agent"
+}

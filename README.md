@@ -58,6 +58,10 @@ Built by Kerry Dean Jr. as a portfolio-grade workflow library, not a sales bundl
 | 39 | Subscription Savings Agent | Recurring charge detection, savings recommendations, cancellation review, watchlist, and audit. |
 | 40 | Study Spaced Repetition Agent | Quiz history, weak-area scoring, spaced review schedules, card creation, and audit. |
 | 41 | Travel Packing Weather Agent | Trip details, forecast, itinerary, packing checklist, document reminders, and audit. |
+| 42 | Home Maintenance Seasonal Agent | Home profile, seasonal weather, warranties, maintenance tasks, contractor review, and audit. |
+| 43 | Reading Watchlist Curator Agent | Saved links, preference matching, duplicate detection, queue ranking, archive suggestions, and audit. |
+| 44 | Outfit Weather Planner Agent | Weather, calendar, wardrobe inventory, dress-code fit, outfit backup, and audit. |
+| 45 | Personal Digest Priority Agent | Inbox, calendar, tasks, priority actions, morning digest, urgent alerts, and audit. |
 
 The generated machine-readable catalog lives at `catalog/workflows.json`.
 
