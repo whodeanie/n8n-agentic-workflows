@@ -659,5 +659,88 @@
       "webhook"
     ],
     "workflowPath": "33-invoice-dispute-agent/workflow.json"
+  },
+  {
+    "slug": "34-pantry-meal-prep-agent",
+    "name": "Pantry Meal Prep Agent",
+    "nodeCount": 14,
+    "stickyNoteCount": 2,
+    "triggerTypes": [
+      "webhook"
+    ],
+    "integrationTypes": [
+      "code",
+      "googleSheets",
+      "httpRequest",
+      "if",
+      "merge",
+      "openAi",
+      "respondToWebhook",
+      "slack",
+      "webhook"
+    ],
+    "workflowPath": "34-pantry-meal-prep-agent/workflow.json"
+  },
+  {
+    "slug": "35-creator-content-remix-agent",
+    "name": "Creator Content Remix Agent",
+    "nodeCount": 12,
+    "stickyNoteCount": 2,
+    "triggerTypes": [
+      "webhook"
+    ],
+    "integrationTypes": [
+      "code",
+      "googleSheets",
+      "httpRequest",
+      "if",
+      "openAi",
+      "respondToWebhook",
+      "slack",
+      "webhook"
+    ],
+    "workflowPath": "35-creator-content-remix-agent/workflow.json"
+  },
+  {
+    "slug": "36-fantasy-sports-waiver-agent",
+    "name": "Fantasy Sports Waiver Agent",
+    "nodeCount": 14,
+    "stickyNoteCount": 2,
+    "triggerTypes": [
+      "scheduleTrigger"
+    ],
+    "integrationTypes": [
+      "code",
+      "googleSheets",
+      "httpRequest",
+      "if",
+      "merge",
+      "openAi",
+      "scheduleTrigger",
+      "slack"
+    ],
+    "workflowPath": "36-fantasy-sports-waiver-agent/workflow.json"
+  },
+  {
+    "slug": "37-weekend-plan-concierge-agent",
+    "name": "Weekend Plan Concierge Agent",
+    "nodeCount": 16,
+    "stickyNoteCount": 2,
+    "triggerTypes": [
+      "webhook"
+    ],
+    "integrationTypes": [
+      "code",
+      "googleCalendar",
+      "googleSheets",
+      "httpRequest",
+      "if",
+      "merge",
+      "openAi",
+      "respondToWebhook",
+      "slack",
+      "webhook"
+    ],
+    "workflowPath": "37-weekend-plan-concierge-agent/workflow.json"
   }
 ]

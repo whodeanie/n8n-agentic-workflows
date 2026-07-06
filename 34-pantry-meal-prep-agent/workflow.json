@@ -1,0 +1,205 @@
+{
+  "name": "Pantry Meal Prep Agent",
+  "nodes": [
+    {
+      "id": "sticky-overview",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [80, 60],
+      "parameters": {
+        "content": "## Pantry Meal Prep Agent\n\nBuilds a weekly meal plan from pantry inventory, preferences, budget, macros, and recipe candidates, then produces a grocery list.",
+        "height": 250,
+        "width": 430,
+        "color": 4
+      }
+    },
+    {
+      "id": "sticky-safety",
+      "name": "Food Safety Notes",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [80, 330],
+      "parameters": {
+        "content": "## Food constraints\n\n. Allergies are hard constraints.\n. Substitutions require confidence.\n. Budget and pantry usage are explicit.\n. Output is a reusable prep plan plus grocery list.",
+        "height": 280,
+        "width": 430,
+        "color": 6
+      }
+    },
+    {
+      "id": "webhook",
+      "name": "Meal Plan Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [280, 320],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "personal/meal-prep",
+        "responseMode": "responseNode",
+        "options": {}
+      }
+    },
+    {
+      "id": "normalize",
+      "name": "Normalize Meal Preferences",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [520, 320],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const body = $json.body ?? $json;\nreturn [{ json: {\n  plan_id: body.plan_id ?? `meal-${Date.now()}`,\n  days: Number(body.days ?? 5),\n  people: Number(body.people ?? 1),\n  budget: Number(body.budget ?? 80),\n  goals: body.goals ?? ['simple', 'high protein'],\n  allergies: body.allergies ?? [],\n  dislikes: body.dislikes ?? [],\n  equipment: body.equipment ?? ['stove', 'oven', 'microwave'],\n  prep_minutes: Number(body.prep_minutes ?? 90)\n} }];"
+      }
+    },
+    {
+      "id": "pantry",
+      "name": "Fetch Pantry Items",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [760, 200],
+      "parameters": {
+        "operation": "read",
+        "documentId": { "__rl": true, "value": "<<PANTRY_SHEET_ID>>", "mode": "id" },
+        "sheetName": { "__rl": true, "value": "Pantry", "mode": "name" },
+        "options": {}
+      },
+      "credentials": { "googleSheetsOAuth2Api": { "id": "REPLACE_ME", "name": "Google Sheets" } }
+    },
+    {
+      "id": "recipes",
+      "name": "Fetch Recipe Candidates",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [760, 440],
+      "parameters": {
+        "method": "GET",
+        "url": "https://recipes.example.com/search?style=meal-prep",
+        "options": {}
+      }
+    },
+    {
+      "id": "merge",
+      "name": "Merge Pantry And Recipes",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [1000, 320],
+      "parameters": {
+        "mode": "combine",
+        "combinationMode": "mergeByPosition",
+        "options": {}
+      }
+    },
+    {
+      "id": "agent",
+      "name": "Meal Prep Agent",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [1240, 320],
+      "parameters": {
+        "resource": "chat",
+        "model": "gpt-4o",
+        "messages": {
+          "values": [
+            { "role": "system", "content": "You build practical meal prep plans. Return JSON only: {weekly_plan, grocery_list, pantry_used, substitutions, estimated_cost, allergy_safe, confidence, prep_steps}." },
+            { "role": "user", "content": "Preferences: {{ JSON.stringify($('Normalize Meal Preferences').item.json) }}\nPantry and recipes: {{ JSON.stringify($json) }}" }
+          ]
+        },
+        "jsonOutput": true,
+        "options": { "temperature": 0.2 }
+      },
+      "credentials": { "openAiApi": { "id": "REPLACE_ME", "name": "OpenAI account" } }
+    },
+    {
+      "id": "shape",
+      "name": "Validate Meal Plan",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1480, 320],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const plan = $json.message?.content ?? $json;\nconst prefs = $('Normalize Meal Preferences').item.json;\nconst grocery = Array.isArray(plan.grocery_list) ? plan.grocery_list : [];\nconst substitutions = Array.isArray(plan.substitutions) ? plan.substitutions : [];\nreturn [{ json: { ...prefs, plan: { ...plan, grocery_list: grocery, substitutions, estimated_cost: Number(plan.estimated_cost ?? 0), confidence: Number(plan.confidence ?? 0), allergy_safe: plan.allergy_safe === true } } }];"
+      }
+    },
+    {
+      "id": "gate",
+      "name": "Needs Substitution Review?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1720, 320],
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            { "leftValue": "={{ !$json.plan.allergy_safe || $json.plan.confidence < 0.82 || $json.plan.estimated_cost > $json.budget * 1.1 }}", "rightValue": true, "operator": { "type": "boolean", "operation": "equal" } }
+          ],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "review",
+      "name": "Send Meal Review",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.3,
+      "position": [1960, 220],
+      "parameters": {
+        "resource": "message",
+        "operation": "post",
+        "channel": "<<MEAL_REVIEW_CHANNEL_ID>>",
+        "text": "Meal plan needs review. Cost: {{ $json.plan.estimated_cost }} / budget {{ $json.budget }}. Allergy safe: {{ $json.plan.allergy_safe }}. Substitutions: {{ JSON.stringify($json.plan.substitutions) }}"
+      },
+      "credentials": { "slackApi": { "id": "REPLACE_ME", "name": "Slack Bot" } }
+    },
+    {
+      "id": "save",
+      "name": "Save Grocery List",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [1960, 440],
+      "parameters": {
+        "operation": "append",
+        "documentId": { "__rl": true, "value": "<<PANTRY_SHEET_ID>>", "mode": "id" },
+        "sheetName": { "__rl": true, "value": "WeeklyPlan", "mode": "name" },
+        "columns": { "mappingMode": "defineBelow", "value": { "ts": "={{ $now.toISO() }}", "plan_id": "={{ $json.plan_id }}", "grocery_list": "={{ JSON.stringify($json.plan.grocery_list) }}", "prep_steps": "={{ JSON.stringify($json.plan.prep_steps) }}" } }
+      },
+      "credentials": { "googleSheetsOAuth2Api": { "id": "REPLACE_ME", "name": "Google Sheets" } }
+    },
+    {
+      "id": "audit",
+      "name": "Write Meal Prep Audit",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [2200, 320],
+      "parameters": {
+        "operation": "append",
+        "documentId": { "__rl": true, "value": "<<PANTRY_SHEET_ID>>", "mode": "id" },
+        "sheetName": { "__rl": true, "value": "MealPrepAudit", "mode": "name" },
+        "columns": { "mappingMode": "defineBelow", "value": { "ts": "={{ $now.toISO() }}", "plan_id": "={{ $('Normalize Meal Preferences').item.json.plan_id }}", "cost": "={{ $('Validate Meal Plan').item.json.plan.estimated_cost }}", "confidence": "={{ $('Validate Meal Plan').item.json.plan.confidence }}" } }
+      },
+      "credentials": { "googleSheetsOAuth2Api": { "id": "REPLACE_ME", "name": "Google Sheets" } }
+    },
+    {
+      "id": "respond",
+      "name": "Respond Meal Plan",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [2440, 320],
+      "parameters": { "options": {}, "respondWith": "allIncomingItems" }
+    }
+  ],
+  "connections": {
+    "Meal Plan Webhook": { "main": [[{ "node": "Normalize Meal Preferences", "type": "main", "index": 0 }]] },
+    "Normalize Meal Preferences": { "main": [[{ "node": "Fetch Pantry Items", "type": "main", "index": 0 }, { "node": "Fetch Recipe Candidates", "type": "main", "index": 0 }]] },
+    "Fetch Pantry Items": { "main": [[{ "node": "Merge Pantry And Recipes", "type": "main", "index": 0 }]] },
+    "Fetch Recipe Candidates": { "main": [[{ "node": "Merge Pantry And Recipes", "type": "main", "index": 1 }]] },
+    "Merge Pantry And Recipes": { "main": [[{ "node": "Meal Prep Agent", "type": "main", "index": 0 }]] },
+    "Meal Prep Agent": { "main": [[{ "node": "Validate Meal Plan", "type": "main", "index": 0 }]] },
+    "Validate Meal Plan": { "main": [[{ "node": "Needs Substitution Review?", "type": "main", "index": 0 }]] },
+    "Needs Substitution Review?": { "main": [[{ "node": "Send Meal Review", "type": "main", "index": 0 }], [{ "node": "Save Grocery List", "type": "main", "index": 0 }]] },
+    "Send Meal Review": { "main": [[{ "node": "Write Meal Prep Audit", "type": "main", "index": 0 }]] },
+    "Save Grocery List": { "main": [[{ "node": "Write Meal Prep Audit", "type": "main", "index": 0 }]] },
+    "Write Meal Prep Audit": { "main": [[{ "node": "Respond Meal Plan", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "pinData": {},
+  "versionId": "34-pantry-meal-prep-agent"
+}

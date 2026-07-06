@@ -50,6 +50,10 @@ Built by Kerry Dean Jr. as a portfolio-grade workflow library, not a sales bundl
 | 31 | Renewal Risk Agent | Usage and support signal merge, renewal risk scoring, CSM tasks, and audit. |
 | 32 | Access Review Agent | Identity and entitlement review, risky-access scoring, manager routing, and audit. |
 | 33 | Invoice Dispute Agent | Invoice, PO, and receipt matching with dispute packets, AP review, and audit. |
+| 34 | Pantry Meal Prep Agent | Pantry inventory, recipe planning, grocery-list generation, substitution review, and audit. |
+| 35 | Creator Content Remix Agent | Long-form content remixing, platform drafts, brand-safety review, scheduling queue, and audit. |
+| 36 | Fantasy Sports Waiver Agent | Roster, news, injury, and matchup signals for waiver recommendations and watchlists. |
+| 37 | Weekend Plan Concierge Agent | Weather, events, food ideas, budget-aware itineraries, backup plans, and calendar drafts. |
 
 The generated machine-readable catalog lives at `catalog/workflows.json`.
 

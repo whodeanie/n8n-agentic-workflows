@@ -1,0 +1,205 @@
+{
+  "name": "Fantasy Sports Waiver Agent",
+  "nodes": [
+    {
+      "id": "sticky-overview",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [80, 60],
+      "parameters": {
+        "content": "## Fantasy Sports Waiver Agent\n\nCombines roster gaps, player news, injuries, and matchups to produce waiver watchlists and claim recommendations.",
+        "height": 250,
+        "width": 430,
+        "color": 4
+      }
+    },
+    {
+      "id": "sticky-responsible",
+      "name": "Responsible Use Notes",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [80, 330],
+      "parameters": {
+        "content": "## Sports guardrails\n\n. Research aid, not betting advice.\n. Include injury and sample-size caveats.\n. Low confidence routes to watchlist.\n. Claim recommendations explain why.",
+        "height": 280,
+        "width": 430,
+        "color": 6
+      }
+    },
+    {
+      "id": "schedule",
+      "name": "Waiver Review Schedule",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [280, 320],
+      "parameters": {
+        "rule": { "interval": [{ "field": "days", "daysInterval": 1 }] }
+      }
+    },
+    {
+      "id": "roster",
+      "name": "Fetch League Roster",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [520, 200],
+      "parameters": {
+        "method": "GET",
+        "url": "https://fantasy.example.com/leagues/current/roster",
+        "options": {}
+      }
+    },
+    {
+      "id": "news",
+      "name": "Fetch Player News",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [520, 320],
+      "parameters": {
+        "method": "GET",
+        "url": "https://sports-news.example.com/fantasy/injuries-and-usage",
+        "options": {}
+      }
+    },
+    {
+      "id": "matchups",
+      "name": "Fetch Matchup Data",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [520, 440],
+      "parameters": {
+        "method": "GET",
+        "url": "https://sports-data.example.com/fantasy/matchups",
+        "options": {}
+      }
+    },
+    {
+      "id": "merge-news",
+      "name": "Merge Roster And News",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [760, 260],
+      "parameters": {
+        "mode": "combine",
+        "combinationMode": "mergeByPosition",
+        "options": {}
+      }
+    },
+    {
+      "id": "merge-all",
+      "name": "Merge Waiver Signals",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [1000, 320],
+      "parameters": {
+        "mode": "combine",
+        "combinationMode": "mergeByPosition",
+        "options": {}
+      }
+    },
+    {
+      "id": "agent",
+      "name": "Waiver Recommendation Agent",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [1240, 320],
+      "parameters": {
+        "resource": "chat",
+        "model": "gpt-4o",
+        "messages": {
+          "values": [
+            { "role": "system", "content": "You create fantasy sports waiver research. Return JSON only: {claim_recommendations, watchlist, drop_candidates, confidence, caveats, summary}. No betting advice." },
+            { "role": "user", "content": "League roster, news, and matchup signals: {{ JSON.stringify($json) }}" }
+          ]
+        },
+        "jsonOutput": true,
+        "options": { "temperature": 0.2 }
+      },
+      "credentials": { "openAiApi": { "id": "REPLACE_ME", "name": "OpenAI account" } }
+    },
+    {
+      "id": "shape",
+      "name": "Validate Waiver Output",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1480, 320],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const rec = $json.message?.content ?? $json;\nconst claims = Array.isArray(rec.claim_recommendations) ? rec.claim_recommendations : [];\nconst watchlist = Array.isArray(rec.watchlist) ? rec.watchlist : [];\nreturn [{ json: { recommendations: { ...rec, claim_recommendations: claims, watchlist, confidence: Number(rec.confidence ?? 0) }, generated_at: new Date().toISOString() } }];"
+      }
+    },
+    {
+      "id": "gate",
+      "name": "High Confidence Claims?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1720, 320],
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            { "leftValue": "={{ $json.recommendations.confidence >= 0.82 && $json.recommendations.claim_recommendations.length > 0 }}", "rightValue": true, "operator": { "type": "boolean", "operation": "equal" } }
+          ],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "claims",
+      "name": "Post Claim Recommendations",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.3,
+      "position": [1960, 220],
+      "parameters": {
+        "resource": "message",
+        "operation": "post",
+        "channel": "<<FANTASY_CHANNEL_ID>>",
+        "text": "Fantasy waiver claims: {{ JSON.stringify($json.recommendations.claim_recommendations) }}\nCaveats: {{ JSON.stringify($json.recommendations.caveats) }}"
+      },
+      "credentials": { "slackApi": { "id": "REPLACE_ME", "name": "Slack Bot" } }
+    },
+    {
+      "id": "watchlist",
+      "name": "Post Watchlist",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.3,
+      "position": [1960, 440],
+      "parameters": {
+        "resource": "message",
+        "operation": "post",
+        "channel": "<<FANTASY_CHANNEL_ID>>",
+        "text": "Fantasy watchlist: {{ JSON.stringify($json.recommendations.watchlist) }}\nSummary: {{ $json.recommendations.summary }}"
+      },
+      "credentials": { "slackApi": { "id": "REPLACE_ME", "name": "Slack Bot" } }
+    },
+    {
+      "id": "audit",
+      "name": "Write Waiver Audit",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [2200, 320],
+      "parameters": {
+        "operation": "append",
+        "documentId": { "__rl": true, "value": "<<FANTASY_AUDIT_SHEET_ID>>", "mode": "id" },
+        "sheetName": { "__rl": true, "value": "WaiverRuns", "mode": "name" },
+        "columns": { "mappingMode": "defineBelow", "value": { "ts": "={{ $json.generated_at }}", "confidence": "={{ $json.recommendations.confidence }}", "claims": "={{ JSON.stringify($json.recommendations.claim_recommendations) }}", "watchlist": "={{ JSON.stringify($json.recommendations.watchlist) }}" } }
+      },
+      "credentials": { "googleSheetsOAuth2Api": { "id": "REPLACE_ME", "name": "Google Sheets" } }
+    }
+  ],
+  "connections": {
+    "Waiver Review Schedule": { "main": [[{ "node": "Fetch League Roster", "type": "main", "index": 0 }, { "node": "Fetch Player News", "type": "main", "index": 0 }, { "node": "Fetch Matchup Data", "type": "main", "index": 0 }]] },
+    "Fetch League Roster": { "main": [[{ "node": "Merge Roster And News", "type": "main", "index": 0 }]] },
+    "Fetch Player News": { "main": [[{ "node": "Merge Roster And News", "type": "main", "index": 1 }]] },
+    "Merge Roster And News": { "main": [[{ "node": "Merge Waiver Signals", "type": "main", "index": 0 }]] },
+    "Fetch Matchup Data": { "main": [[{ "node": "Merge Waiver Signals", "type": "main", "index": 1 }]] },
+    "Merge Waiver Signals": { "main": [[{ "node": "Waiver Recommendation Agent", "type": "main", "index": 0 }]] },
+    "Waiver Recommendation Agent": { "main": [[{ "node": "Validate Waiver Output", "type": "main", "index": 0 }]] },
+    "Validate Waiver Output": { "main": [[{ "node": "High Confidence Claims?", "type": "main", "index": 0 }]] },
+    "High Confidence Claims?": { "main": [[{ "node": "Post Claim Recommendations", "type": "main", "index": 0 }], [{ "node": "Post Watchlist", "type": "main", "index": 0 }]] },
+    "Post Claim Recommendations": { "main": [[{ "node": "Write Waiver Audit", "type": "main", "index": 0 }]] },
+    "Post Watchlist": { "main": [[{ "node": "Write Waiver Audit", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "pinData": {},
+  "versionId": "36-fantasy-sports-waiver-agent"
+}

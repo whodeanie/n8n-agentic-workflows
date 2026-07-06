@@ -1,0 +1,232 @@
+{
+  "name": "Weekend Plan Concierge Agent",
+  "nodes": [
+    {
+      "id": "sticky-overview",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [80, 60],
+      "parameters": {
+        "content": "## Weekend Plan Concierge Agent\n\nBuilds a weekend itinerary from preferences, budget, weather, events, and food ideas, then creates calendar-ready drafts.",
+        "height": 250,
+        "width": 430,
+        "color": 4
+      }
+    },
+    {
+      "id": "sticky-planning",
+      "name": "Planning Notes",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [80, 330],
+      "parameters": {
+        "content": "## Itinerary controls\n\n. Weather fit matters.\n. Include backup options.\n. Respect budget and travel radius.\n. Draft calendar events only.",
+        "height": 270,
+        "width": 430,
+        "color": 6
+      }
+    },
+    {
+      "id": "webhook",
+      "name": "Weekend Plan Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [280, 320],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "personal/weekend-plan",
+        "responseMode": "responseNode",
+        "options": {}
+      }
+    },
+    {
+      "id": "normalize",
+      "name": "Normalize Weekend Preferences",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [520, 320],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const body = $json.body ?? $json;\nreturn [{ json: {\n  plan_id: body.plan_id ?? `weekend-${Date.now()}`,\n  city: body.city ?? 'Chicago, IL',\n  date_range: body.date_range ?? 'this weekend',\n  budget: Number(body.budget ?? 120),\n  group_size: Number(body.group_size ?? 2),\n  vibe: body.vibe ?? ['good food', 'low stress', 'something active'],\n  radius_miles: Number(body.radius_miles ?? 20),\n  avoid: body.avoid ?? []\n} }];"
+      }
+    },
+    {
+      "id": "weather",
+      "name": "Fetch Weather",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [760, 160],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ `https://weather.example.com/forecast?city=${encodeURIComponent($json.city)}&range=${encodeURIComponent($json.date_range)}` }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "events",
+      "name": "Fetch Local Events",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [760, 320],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ `https://events.example.com/search?city=${encodeURIComponent($json.city)}&radius=${$json.radius_miles}` }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "food",
+      "name": "Fetch Food Ideas",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [760, 480],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ `https://places.example.com/food?city=${encodeURIComponent($json.city)}&budget=${$json.budget}` }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "merge-events",
+      "name": "Merge Weather And Events",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [1000, 240],
+      "parameters": {
+        "mode": "combine",
+        "combinationMode": "mergeByPosition",
+        "options": {}
+      }
+    },
+    {
+      "id": "merge-all",
+      "name": "Merge Weekend Signals",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [1240, 320],
+      "parameters": {
+        "mode": "combine",
+        "combinationMode": "mergeByPosition",
+        "options": {}
+      }
+    },
+    {
+      "id": "agent",
+      "name": "Weekend Concierge Agent",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [1480, 320],
+      "parameters": {
+        "resource": "chat",
+        "model": "gpt-4o",
+        "messages": {
+          "values": [
+            { "role": "system", "content": "You create practical weekend itineraries. Return JSON only: {primary_plan, backup_plan, calendar_events, estimated_cost, travel_notes, weather_fit, confidence}. Do not book or buy anything." },
+            { "role": "user", "content": "Preferences: {{ JSON.stringify($('Normalize Weekend Preferences').item.json) }}\nWeather, events, and food ideas: {{ JSON.stringify($json) }}" }
+          ]
+        },
+        "jsonOutput": true,
+        "options": { "temperature": 0.3 }
+      },
+      "credentials": { "openAiApi": { "id": "REPLACE_ME", "name": "OpenAI account" } }
+    },
+    {
+      "id": "shape",
+      "name": "Validate Weekend Plan",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1720, 320],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const plan = $json.message?.content ?? $json;\nconst prefs = $('Normalize Weekend Preferences').item.json;\nconst events = Array.isArray(plan.calendar_events) ? plan.calendar_events : [];\nreturn [{ json: { ...prefs, weekend: { ...plan, calendar_events: events, estimated_cost: Number(plan.estimated_cost ?? 0), confidence: Number(plan.confidence ?? 0), weather_fit: plan.weather_fit ?? 'unknown' } } }];"
+      }
+    },
+    {
+      "id": "gate",
+      "name": "Use Backup Plan?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1960, 320],
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            { "leftValue": "={{ $json.weekend.weather_fit === 'poor' || $json.weekend.estimated_cost > $json.budget * 1.15 || $json.weekend.confidence < 0.8 }}", "rightValue": true, "operator": { "type": "boolean", "operation": "equal" } }
+          ],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "backup",
+      "name": "Post Backup Plan",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.3,
+      "position": [2200, 220],
+      "parameters": {
+        "resource": "message",
+        "operation": "post",
+        "channel": "<<WEEKEND_PLAN_CHANNEL_ID>>",
+        "text": "Backup weekend plan for {{ $json.city }}: {{ JSON.stringify($json.weekend.backup_plan) }}. Notes: {{ $json.weekend.travel_notes }}"
+      },
+      "credentials": { "slackApi": { "id": "REPLACE_ME", "name": "Slack Bot" } }
+    },
+    {
+      "id": "calendar",
+      "name": "Create Calendar Draft",
+      "type": "n8n-nodes-base.googleCalendar",
+      "typeVersion": 1.2,
+      "position": [2200, 440],
+      "parameters": {
+        "calendar": { "__rl": true, "value": "<<CALENDAR_ID>>", "mode": "id" },
+        "start": "={{ $now.plus({ days: 2 }).toISO() }}",
+        "end": "={{ $now.plus({ days: 2, hours: 3 }).toISO() }}",
+        "additionalFields": {
+          "summary": "Weekend plan draft",
+          "description": "={{ JSON.stringify($json.weekend.primary_plan) }}"
+        }
+      },
+      "credentials": { "googleCalendarOAuth2Api": { "id": "REPLACE_ME", "name": "Google Calendar" } }
+    },
+    {
+      "id": "audit",
+      "name": "Write Weekend Audit",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [2440, 320],
+      "parameters": {
+        "operation": "append",
+        "documentId": { "__rl": true, "value": "<<WEEKEND_AUDIT_SHEET_ID>>", "mode": "id" },
+        "sheetName": { "__rl": true, "value": "WeekendPlans", "mode": "name" },
+        "columns": { "mappingMode": "defineBelow", "value": { "ts": "={{ $now.toISO() }}", "plan_id": "={{ $('Normalize Weekend Preferences').item.json.plan_id }}", "city": "={{ $('Normalize Weekend Preferences').item.json.city }}", "cost": "={{ $('Validate Weekend Plan').item.json.weekend.estimated_cost }}", "weather_fit": "={{ $('Validate Weekend Plan').item.json.weekend.weather_fit }}" } }
+      },
+      "credentials": { "googleSheetsOAuth2Api": { "id": "REPLACE_ME", "name": "Google Sheets" } }
+    },
+    {
+      "id": "respond",
+      "name": "Respond Weekend Plan",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [2680, 320],
+      "parameters": { "options": {}, "respondWith": "allIncomingItems" }
+    }
+  ],
+  "connections": {
+    "Weekend Plan Webhook": { "main": [[{ "node": "Normalize Weekend Preferences", "type": "main", "index": 0 }]] },
+    "Normalize Weekend Preferences": { "main": [[{ "node": "Fetch Weather", "type": "main", "index": 0 }, { "node": "Fetch Local Events", "type": "main", "index": 0 }, { "node": "Fetch Food Ideas", "type": "main", "index": 0 }]] },
+    "Fetch Weather": { "main": [[{ "node": "Merge Weather And Events", "type": "main", "index": 0 }]] },
+    "Fetch Local Events": { "main": [[{ "node": "Merge Weather And Events", "type": "main", "index": 1 }]] },
+    "Merge Weather And Events": { "main": [[{ "node": "Merge Weekend Signals", "type": "main", "index": 0 }]] },
+    "Fetch Food Ideas": { "main": [[{ "node": "Merge Weekend Signals", "type": "main", "index": 1 }]] },
+    "Merge Weekend Signals": { "main": [[{ "node": "Weekend Concierge Agent", "type": "main", "index": 0 }]] },
+    "Weekend Concierge Agent": { "main": [[{ "node": "Validate Weekend Plan", "type": "main", "index": 0 }]] },
+    "Validate Weekend Plan": { "main": [[{ "node": "Use Backup Plan?", "type": "main", "index": 0 }]] },
+    "Use Backup Plan?": { "main": [[{ "node": "Post Backup Plan", "type": "main", "index": 0 }], [{ "node": "Create Calendar Draft", "type": "main", "index": 0 }]] },
+    "Post Backup Plan": { "main": [[{ "node": "Write Weekend Audit", "type": "main", "index": 0 }]] },
+    "Create Calendar Draft": { "main": [[{ "node": "Write Weekend Audit", "type": "main", "index": 0 }]] },
+    "Write Weekend Audit": { "main": [[{ "node": "Respond Weekend Plan", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "pinData": {},
+  "versionId": "37-weekend-plan-concierge-agent"
+}

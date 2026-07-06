@@ -1,0 +1,181 @@
+{
+  "name": "Creator Content Remix Agent",
+  "nodes": [
+    {
+      "id": "sticky-overview",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [80, 60],
+      "parameters": {
+        "content": "## Creator Content Remix Agent\n\nTurns one long-form idea into platform-specific draft posts, checks brand risk, and queues drafts for review or scheduling.",
+        "height": 250,
+        "width": 430,
+        "color": 4
+      }
+    },
+    {
+      "id": "sticky-creator",
+      "name": "Creator Notes",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [80, 330],
+      "parameters": {
+        "content": "## Publishing controls\n\n. Drafts only, no silent posting.\n. Keep source attribution.\n. Brand-sensitive content routes to review.\n. Each platform gets a native format.",
+        "height": 280,
+        "width": 430,
+        "color": 6
+      }
+    },
+    {
+      "id": "webhook",
+      "name": "Content Remix Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [280, 320],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "creator/content-remix",
+        "responseMode": "responseNode",
+        "options": {}
+      }
+    },
+    {
+      "id": "normalize",
+      "name": "Normalize Source Content",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [520, 320],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const body = $json.body ?? $json;\nreturn [{ json: {\n  content_id: body.content_id ?? `content-${Date.now()}`,\n  source_type: body.source_type ?? 'note',\n  source_url: body.source_url ?? null,\n  source_text: body.source_text ?? body.transcript ?? '',\n  platforms: body.platforms ?? ['linkedin', 'x', 'tiktok', 'newsletter'],\n  tone: body.tone ?? 'smart, direct, human',\n  forbidden_claims: body.forbidden_claims ?? []\n} }];"
+      }
+    },
+    {
+      "id": "voice",
+      "name": "Fetch Brand Voice",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [760, 320],
+      "parameters": {
+        "operation": "read",
+        "documentId": { "__rl": true, "value": "<<CREATOR_BRAND_SHEET_ID>>", "mode": "id" },
+        "sheetName": { "__rl": true, "value": "Voice", "mode": "name" },
+        "options": {}
+      },
+      "credentials": { "googleSheetsOAuth2Api": { "id": "REPLACE_ME", "name": "Google Sheets" } }
+    },
+    {
+      "id": "agent",
+      "name": "Remix Content Agent",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [1000, 320],
+      "parameters": {
+        "resource": "chat",
+        "model": "gpt-4o",
+        "messages": {
+          "values": [
+            { "role": "system", "content": "You repurpose creator content into platform-native drafts. Return JSON only: {drafts:[{platform,hook,body,cta,source_notes,risk_level}], review_required, confidence, rationale}." },
+            { "role": "user", "content": "Source content: {{ JSON.stringify($('Normalize Source Content').item.json) }}\nBrand voice: {{ JSON.stringify($json) }}" }
+          ]
+        },
+        "jsonOutput": true,
+        "options": { "temperature": 0.35 }
+      },
+      "credentials": { "openAiApi": { "id": "REPLACE_ME", "name": "OpenAI account" } }
+    },
+    {
+      "id": "shape",
+      "name": "Validate Drafts",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1240, 320],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const result = $json.message?.content ?? $json;\nconst source = $('Normalize Source Content').item.json;\nconst drafts = Array.isArray(result.drafts) ? result.drafts : [];\nconst risky = drafts.filter((draft) => draft.risk_level && draft.risk_level !== 'low');\nreturn [{ json: { ...source, remix: { ...result, drafts, risky_count: risky.length, confidence: Number(result.confidence ?? 0), review_required: result.review_required === true } } }];"
+      }
+    },
+    {
+      "id": "gate",
+      "name": "Needs Creator Review?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1480, 320],
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            { "leftValue": "={{ $json.remix.review_required || $json.remix.risky_count > 0 || $json.remix.confidence < 0.84 }}", "rightValue": true, "operator": { "type": "boolean", "operation": "equal" } }
+          ],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "review",
+      "name": "Send Creator Review",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.3,
+      "position": [1720, 220],
+      "parameters": {
+        "resource": "message",
+        "operation": "post",
+        "channel": "<<CREATOR_REVIEW_CHANNEL_ID>>",
+        "text": "Content remix needs review: {{ $json.content_id }}. Risky drafts: {{ $json.remix.risky_count }}. Rationale: {{ $json.remix.rationale }}"
+      },
+      "credentials": { "slackApi": { "id": "REPLACE_ME", "name": "Slack Bot" } }
+    },
+    {
+      "id": "queue",
+      "name": "Queue Social Drafts",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1720, 440],
+      "parameters": {
+        "method": "POST",
+        "url": "https://scheduler.example.com/drafts",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ content_id: $json.content_id, drafts: $json.remix.drafts }) }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "audit",
+      "name": "Write Remix Audit",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [1960, 320],
+      "parameters": {
+        "operation": "append",
+        "documentId": { "__rl": true, "value": "<<CREATOR_BRAND_SHEET_ID>>", "mode": "id" },
+        "sheetName": { "__rl": true, "value": "RemixAudit", "mode": "name" },
+        "columns": { "mappingMode": "defineBelow", "value": { "ts": "={{ $now.toISO() }}", "content_id": "={{ $('Normalize Source Content').item.json.content_id }}", "draft_count": "={{ $('Validate Drafts').item.json.remix.drafts.length }}", "confidence": "={{ $('Validate Drafts').item.json.remix.confidence }}" } }
+      },
+      "credentials": { "googleSheetsOAuth2Api": { "id": "REPLACE_ME", "name": "Google Sheets" } }
+    },
+    {
+      "id": "respond",
+      "name": "Respond Remix Summary",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [2200, 320],
+      "parameters": { "options": {}, "respondWith": "allIncomingItems" }
+    }
+  ],
+  "connections": {
+    "Content Remix Webhook": { "main": [[{ "node": "Normalize Source Content", "type": "main", "index": 0 }]] },
+    "Normalize Source Content": { "main": [[{ "node": "Fetch Brand Voice", "type": "main", "index": 0 }]] },
+    "Fetch Brand Voice": { "main": [[{ "node": "Remix Content Agent", "type": "main", "index": 0 }]] },
+    "Remix Content Agent": { "main": [[{ "node": "Validate Drafts", "type": "main", "index": 0 }]] },
+    "Validate Drafts": { "main": [[{ "node": "Needs Creator Review?", "type": "main", "index": 0 }]] },
+    "Needs Creator Review?": { "main": [[{ "node": "Send Creator Review", "type": "main", "index": 0 }], [{ "node": "Queue Social Drafts", "type": "main", "index": 0 }]] },
+    "Send Creator Review": { "main": [[{ "node": "Write Remix Audit", "type": "main", "index": 0 }]] },
+    "Queue Social Drafts": { "main": [[{ "node": "Write Remix Audit", "type": "main", "index": 0 }]] },
+    "Write Remix Audit": { "main": [[{ "node": "Respond Remix Summary", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "pinData": {},
+  "versionId": "35-creator-content-remix-agent"
+}
