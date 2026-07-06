@@ -592,5 +592,72 @@
       "slack"
     ],
     "workflowPath": "30-executive-briefing-agent/workflow.json"
+  },
+  {
+    "slug": "31-renewal-risk-agent",
+    "name": "Renewal Risk Agent",
+    "nodeCount": 15,
+    "stickyNoteCount": 2,
+    "triggerTypes": [
+      "scheduleTrigger"
+    ],
+    "integrationTypes": [
+      "code",
+      "googleSheets",
+      "httpRequest",
+      "hubspot",
+      "if",
+      "merge",
+      "openAi",
+      "scheduleTrigger",
+      "slack",
+      "splitInBatches"
+    ],
+    "workflowPath": "31-renewal-risk-agent/workflow.json"
+  },
+  {
+    "slug": "32-access-review-agent",
+    "name": "Access Review Agent",
+    "nodeCount": 15,
+    "stickyNoteCount": 2,
+    "triggerTypes": [
+      "scheduleTrigger"
+    ],
+    "integrationTypes": [
+      "code",
+      "googleSheets",
+      "httpRequest",
+      "if",
+      "merge",
+      "openAi",
+      "scheduleTrigger",
+      "set",
+      "slack",
+      "splitInBatches"
+    ],
+    "workflowPath": "32-access-review-agent/workflow.json"
+  },
+  {
+    "slug": "33-invoice-dispute-agent",
+    "name": "Invoice Dispute Agent",
+    "nodeCount": 15,
+    "stickyNoteCount": 2,
+    "triggerTypes": [
+      "webhook"
+    ],
+    "integrationTypes": [
+      "code",
+      "gmail",
+      "googleSheets",
+      "httpRequest",
+      "if",
+      "merge",
+      "openAi",
+      "respondToWebhook",
+      "set",
+      "slack",
+      "webhook"
+    ],
+    "workflowPath": "33-invoice-dispute-agent/workflow.json"
   }
 ]

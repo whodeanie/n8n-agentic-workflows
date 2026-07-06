@@ -1,0 +1,219 @@
+{
+  "name": "Renewal Risk Agent",
+  "nodes": [
+    {
+      "id": "sticky-overview",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [80, 60],
+      "parameters": {
+        "content": "## Renewal Risk Agent\n\nCombines renewal dates, account value, usage changes, and support signals to create renewal risk actions and leadership alerts.",
+        "height": 250,
+        "width": 430,
+        "color": 4
+      }
+    },
+    {
+      "id": "sticky-controls",
+      "name": "Retention Notes",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [80, 330],
+      "parameters": {
+        "content": "## Retention controls\n\n. Pull usage and support evidence before scoring.\n. Separate risk score from next action.\n. High ARR routes to leadership.\n. Every action writes an audit row.",
+        "height": 280,
+        "width": 430,
+        "color": 6
+      }
+    },
+    {
+      "id": "schedule",
+      "name": "Renewal Review Schedule",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [280, 320],
+      "parameters": {
+        "rule": { "interval": [{ "field": "weeks", "weeksInterval": 1 }] }
+      }
+    },
+    {
+      "id": "accounts",
+      "name": "Fetch Renewal Accounts",
+      "type": "n8n-nodes-base.hubspot",
+      "typeVersion": 2.1,
+      "position": [520, 320],
+      "parameters": {
+        "resource": "company",
+        "operation": "getAll",
+        "returnAll": false,
+        "limit": 100
+      },
+      "credentials": { "hubspotApi": { "id": "REPLACE_ME", "name": "HubSpot account" } }
+    },
+    {
+      "id": "normalize",
+      "name": "Normalize Accounts",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [760, 320],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const accounts = $input.all().map((item) => item.json);\nreturn accounts.map((account, index) => ({ json: {\n  account_id: account.id ?? `account-${index + 1}`,\n  name: account.properties?.name ?? account.name ?? 'Unnamed account',\n  owner: account.properties?.hubspot_owner_id ?? account.owner ?? 'unknown',\n  arr: Number(account.properties?.annualrevenue ?? account.arr ?? 0),\n  renewal_date: account.properties?.renewal_date ?? account.renewal_date ?? null,\n  tier: account.properties?.customer_tier ?? account.tier ?? 'standard'\n} }));"
+      }
+    },
+    {
+      "id": "split",
+      "name": "Per Renewal Account",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [1000, 320],
+      "parameters": { "batchSize": 1, "options": {} }
+    },
+    {
+      "id": "usage",
+      "name": "Fetch Usage Signals",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1240, 200],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ `https://product-analytics.example.com/accounts/${$json.account_id}/usage?window=90d` }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "support",
+      "name": "Fetch Support Signals",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1240, 440],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ `https://support.example.com/accounts/${$json.account_id}/tickets?window=90d` }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "merge",
+      "name": "Merge Account Signals",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [1480, 320],
+      "parameters": {
+        "mode": "combine",
+        "combinationMode": "mergeByPosition",
+        "options": {}
+      }
+    },
+    {
+      "id": "agent",
+      "name": "Renewal Risk Agent",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [1720, 320],
+      "parameters": {
+        "resource": "chat",
+        "model": "gpt-4o",
+        "messages": {
+          "values": [
+            { "role": "system", "content": "You are a customer success renewal analyst. Return JSON only: {risk_level, risk_score, evidence, next_action, owner_task, leadership_note, confidence}. risk_level is low, medium, or high." },
+            { "role": "user", "content": "Account: {{ JSON.stringify($('Per Renewal Account').item.json) }}\nSignals: {{ JSON.stringify($json) }}" }
+          ]
+        },
+        "jsonOutput": true,
+        "options": { "temperature": 0.1 }
+      },
+      "credentials": { "openAiApi": { "id": "REPLACE_ME", "name": "OpenAI account" } }
+    },
+    {
+      "id": "shape",
+      "name": "Shape Renewal Risk",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1960, 320],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const result = $json.message?.content ?? $json;\nconst account = $('Per Renewal Account').item.json;\nconst risk_level = ['low', 'medium', 'high'].includes(result.risk_level) ? result.risk_level : 'high';\nreturn [{ json: { ...account, risk: { ...result, risk_level, risk_score: Number(result.risk_score ?? 0.5), confidence: Number(result.confidence ?? 0) } } }];"
+      }
+    },
+    {
+      "id": "gate",
+      "name": "Escalate Renewal Risk?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [2200, 320],
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            { "leftValue": "={{ $json.risk.risk_level === 'high' || $json.risk.risk_score >= 0.72 || $json.arr >= 100000 }}", "rightValue": true, "operator": { "type": "boolean", "operation": "equal" } }
+          ],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "alert",
+      "name": "Post Leadership Renewal Alert",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.3,
+      "position": [2440, 220],
+      "parameters": {
+        "resource": "message",
+        "operation": "post",
+        "channel": "<<RENEWAL_RISK_CHANNEL_ID>>",
+        "text": "Renewal risk: {{ $json.name }}. ARR: {{ $json.arr }}. Risk: {{ $json.risk.risk_level }} / {{ $json.risk.risk_score }}. Action: {{ $json.risk.next_action }}. Evidence: {{ JSON.stringify($json.risk.evidence) }}"
+      },
+      "credentials": { "slackApi": { "id": "REPLACE_ME", "name": "Slack Bot" } }
+    },
+    {
+      "id": "task",
+      "name": "Create CSM Task",
+      "type": "n8n-nodes-base.hubspot",
+      "typeVersion": 2.1,
+      "position": [2440, 440],
+      "parameters": {
+        "resource": "engagement",
+        "operation": "create",
+        "type": "TASK",
+        "metadata": {
+          "subject": "={{ $json.risk.owner_task ?? `Renewal follow up: ${$json.name}` }}",
+          "body": "={{ `${$json.risk.next_action}\\nEvidence: ${JSON.stringify($json.risk.evidence)}` }}"
+        }
+      },
+      "credentials": { "hubspotApi": { "id": "REPLACE_ME", "name": "HubSpot account" } }
+    },
+    {
+      "id": "audit",
+      "name": "Write Renewal Audit",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [2680, 320],
+      "parameters": {
+        "operation": "append",
+        "documentId": { "__rl": true, "value": "<<RENEWAL_AUDIT_SHEET_ID>>", "mode": "id" },
+        "sheetName": { "__rl": true, "value": "RenewalRisk", "mode": "name" },
+        "columns": { "mappingMode": "defineBelow", "value": { "ts": "={{ $now.toISO() }}", "account_id": "={{ $('Per Renewal Account').item.json.account_id }}", "account": "={{ $('Per Renewal Account').item.json.name }}", "risk": "={{ $('Shape Renewal Risk').item.json.risk.risk_level }}", "score": "={{ $('Shape Renewal Risk').item.json.risk.risk_score }}" } }
+      },
+      "credentials": { "googleSheetsOAuth2Api": { "id": "REPLACE_ME", "name": "Google Sheets" } }
+    }
+  ],
+  "connections": {
+    "Renewal Review Schedule": { "main": [[{ "node": "Fetch Renewal Accounts", "type": "main", "index": 0 }]] },
+    "Fetch Renewal Accounts": { "main": [[{ "node": "Normalize Accounts", "type": "main", "index": 0 }]] },
+    "Normalize Accounts": { "main": [[{ "node": "Per Renewal Account", "type": "main", "index": 0 }]] },
+    "Per Renewal Account": { "main": [[{ "node": "Fetch Usage Signals", "type": "main", "index": 0 }, { "node": "Fetch Support Signals", "type": "main", "index": 0 }]] },
+    "Fetch Usage Signals": { "main": [[{ "node": "Merge Account Signals", "type": "main", "index": 0 }]] },
+    "Fetch Support Signals": { "main": [[{ "node": "Merge Account Signals", "type": "main", "index": 1 }]] },
+    "Merge Account Signals": { "main": [[{ "node": "Renewal Risk Agent", "type": "main", "index": 0 }]] },
+    "Renewal Risk Agent": { "main": [[{ "node": "Shape Renewal Risk", "type": "main", "index": 0 }]] },
+    "Shape Renewal Risk": { "main": [[{ "node": "Escalate Renewal Risk?", "type": "main", "index": 0 }]] },
+    "Escalate Renewal Risk?": { "main": [[{ "node": "Post Leadership Renewal Alert", "type": "main", "index": 0 }], [{ "node": "Create CSM Task", "type": "main", "index": 0 }]] },
+    "Post Leadership Renewal Alert": { "main": [[{ "node": "Write Renewal Audit", "type": "main", "index": 0 }]] },
+    "Create CSM Task": { "main": [[{ "node": "Write Renewal Audit", "type": "main", "index": 0 }]] },
+    "Write Renewal Audit": { "main": [[{ "node": "Per Renewal Account", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "pinData": {},
+  "versionId": "31-renewal-risk-agent"
+}

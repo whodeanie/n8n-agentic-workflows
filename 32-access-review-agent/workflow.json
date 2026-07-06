@@ -1,0 +1,214 @@
+{
+  "name": "Access Review Agent",
+  "nodes": [
+    {
+      "id": "sticky-overview",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [80, 60],
+      "parameters": {
+        "content": "## Access Review Agent\n\nReviews user entitlements against role policy, flags risky access, routes exceptions to managers, and writes audit evidence.",
+        "height": 250,
+        "width": 430,
+        "color": 4
+      }
+    },
+    {
+      "id": "sticky-security",
+      "name": "Security Notes",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [80, 330],
+      "parameters": {
+        "content": "## Access controls\n\n. Review before revoke.\n. Privileged access always routes to a human.\n. Departed or unknown users are exceptions.\n. Audit output supports certification evidence.",
+        "height": 280,
+        "width": 430,
+        "color": 6
+      }
+    },
+    {
+      "id": "schedule",
+      "name": "Access Review Schedule",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [280, 320],
+      "parameters": {
+        "rule": { "interval": [{ "field": "months", "monthsInterval": 3 }] }
+      }
+    },
+    {
+      "id": "users",
+      "name": "Fetch Identity Users",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [520, 220],
+      "parameters": {
+        "method": "GET",
+        "url": "https://identity.example.com/users?status=active",
+        "options": {}
+      }
+    },
+    {
+      "id": "entitlements",
+      "name": "Fetch Entitlements",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [520, 440],
+      "parameters": {
+        "method": "GET",
+        "url": "https://identity.example.com/entitlements",
+        "options": {}
+      }
+    },
+    {
+      "id": "merge",
+      "name": "Merge Identity Data",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [760, 320],
+      "parameters": {
+        "mode": "combine",
+        "combinationMode": "mergeByPosition",
+        "options": {}
+      }
+    },
+    {
+      "id": "normalize",
+      "name": "Normalize Access Records",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1000, 320],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const users = Array.isArray($json.users) ? $json.users : ($json.data?.users ?? []);\nconst entitlements = Array.isArray($json.entitlements) ? $json.entitlements : ($json.data?.entitlements ?? []);\nconst byUser = new Map();\nfor (const entitlement of entitlements) {\n  const userId = entitlement.user_id ?? entitlement.userId;\n  if (!byUser.has(userId)) byUser.set(userId, []);\n  byUser.get(userId).push(entitlement);\n}\nreturn users.map((user, index) => ({ json: {\n  user_id: user.id ?? user.user_id ?? `user-${index + 1}`,\n  email: user.email ?? 'unknown',\n  role: user.role ?? user.title ?? 'unknown',\n  department: user.department ?? 'unknown',\n  manager: user.manager ?? null,\n  status: user.status ?? 'unknown',\n  entitlements: byUser.get(user.id ?? user.user_id) ?? []\n} }));"
+      }
+    },
+    {
+      "id": "split",
+      "name": "Per User Access Review",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [1240, 320],
+      "parameters": { "batchSize": 1, "options": {} }
+    },
+    {
+      "id": "policy",
+      "name": "Fetch Role Policy",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1480, 320],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ `https://security-policy.example.com/access?role=${encodeURIComponent($json.role)}&department=${encodeURIComponent($json.department)}` }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "agent",
+      "name": "Access Review Agent",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [1720, 320],
+      "parameters": {
+        "resource": "chat",
+        "model": "gpt-4o",
+        "messages": {
+          "values": [
+            { "role": "system", "content": "You review SaaS entitlements against role policy. Return JSON only: {risk_level, exceptions, privileged_access, recommended_action, manager_note, confidence}. risk_level is low, medium, or high." },
+            { "role": "user", "content": "User access: {{ JSON.stringify($('Per User Access Review').item.json) }}\nRole policy: {{ JSON.stringify($json) }}" }
+          ]
+        },
+        "jsonOutput": true,
+        "options": { "temperature": 0.05 }
+      },
+      "credentials": { "openAiApi": { "id": "REPLACE_ME", "name": "OpenAI account" } }
+    },
+    {
+      "id": "shape",
+      "name": "Shape Access Review",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1960, 320],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const review = $json.message?.content ?? $json;\nconst user = $('Per User Access Review').item.json;\nconst exceptions = Array.isArray(review.exceptions) ? review.exceptions : [];\nconst privileged = Array.isArray(review.privileged_access) ? review.privileged_access : [];\nconst risk_level = ['low', 'medium', 'high'].includes(review.risk_level) ? review.risk_level : 'high';\nreturn [{ json: { ...user, review: { ...review, exceptions, privileged_access: privileged, risk_level, confidence: Number(review.confidence ?? 0) } } }];"
+      }
+    },
+    {
+      "id": "gate",
+      "name": "Needs Manager Approval?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [2200, 320],
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            { "leftValue": "={{ $json.review.risk_level !== 'low' || $json.review.exceptions.length > 0 || $json.review.privileged_access.length > 0 || $json.status !== 'active' }}", "rightValue": true, "operator": { "type": "boolean", "operation": "equal" } }
+          ],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "approval",
+      "name": "Send Manager Approval",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.3,
+      "position": [2440, 220],
+      "parameters": {
+        "resource": "message",
+        "operation": "post",
+        "channel": "<<ACCESS_REVIEW_CHANNEL_ID>>",
+        "text": "Access review needed for {{ $json.email }}. Role: {{ $json.role }}. Risk: {{ $json.review.risk_level }}. Exceptions: {{ JSON.stringify($json.review.exceptions) }}. Note: {{ $json.review.manager_note }}"
+      },
+      "credentials": { "slackApi": { "id": "REPLACE_ME", "name": "Slack Bot" } }
+    },
+    {
+      "id": "attest",
+      "name": "Mark Auto Attested",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3,
+      "position": [2440, 440],
+      "parameters": {
+        "assignments": { "assignments": [
+          { "id": "a1", "name": "attestation_status", "value": "auto_attested_low_risk", "type": "string" },
+          { "id": "a2", "name": "attestation_reason", "value": "={{ $json.review.recommended_action }}", "type": "string" }
+        ] },
+        "options": {}
+      }
+    },
+    {
+      "id": "audit",
+      "name": "Write Access Review Audit",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [2680, 320],
+      "parameters": {
+        "operation": "append",
+        "documentId": { "__rl": true, "value": "<<ACCESS_REVIEW_SHEET_ID>>", "mode": "id" },
+        "sheetName": { "__rl": true, "value": "AccessReview", "mode": "name" },
+        "columns": { "mappingMode": "defineBelow", "value": { "ts": "={{ $now.toISO() }}", "user_id": "={{ $('Per User Access Review').item.json.user_id }}", "email": "={{ $('Per User Access Review').item.json.email }}", "risk": "={{ $('Shape Access Review').item.json.review.risk_level }}", "status": "={{ $json.attestation_status ?? 'manager_review_requested' }}" } }
+      },
+      "credentials": { "googleSheetsOAuth2Api": { "id": "REPLACE_ME", "name": "Google Sheets" } }
+    }
+  ],
+  "connections": {
+    "Access Review Schedule": { "main": [[{ "node": "Fetch Identity Users", "type": "main", "index": 0 }, { "node": "Fetch Entitlements", "type": "main", "index": 0 }]] },
+    "Fetch Identity Users": { "main": [[{ "node": "Merge Identity Data", "type": "main", "index": 0 }]] },
+    "Fetch Entitlements": { "main": [[{ "node": "Merge Identity Data", "type": "main", "index": 1 }]] },
+    "Merge Identity Data": { "main": [[{ "node": "Normalize Access Records", "type": "main", "index": 0 }]] },
+    "Normalize Access Records": { "main": [[{ "node": "Per User Access Review", "type": "main", "index": 0 }]] },
+    "Per User Access Review": { "main": [[{ "node": "Fetch Role Policy", "type": "main", "index": 0 }]] },
+    "Fetch Role Policy": { "main": [[{ "node": "Access Review Agent", "type": "main", "index": 0 }]] },
+    "Access Review Agent": { "main": [[{ "node": "Shape Access Review", "type": "main", "index": 0 }]] },
+    "Shape Access Review": { "main": [[{ "node": "Needs Manager Approval?", "type": "main", "index": 0 }]] },
+    "Needs Manager Approval?": { "main": [[{ "node": "Send Manager Approval", "type": "main", "index": 0 }], [{ "node": "Mark Auto Attested", "type": "main", "index": 0 }]] },
+    "Send Manager Approval": { "main": [[{ "node": "Write Access Review Audit", "type": "main", "index": 0 }]] },
+    "Mark Auto Attested": { "main": [[{ "node": "Write Access Review Audit", "type": "main", "index": 0 }]] },
+    "Write Access Review Audit": { "main": [[{ "node": "Per User Access Review", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "pinData": {},
+  "versionId": "32-access-review-agent"
+}

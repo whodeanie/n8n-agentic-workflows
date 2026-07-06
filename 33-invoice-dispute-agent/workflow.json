@@ -1,0 +1,219 @@
+{
+  "name": "Invoice Dispute Agent",
+  "nodes": [
+    {
+      "id": "sticky-overview",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [80, 60],
+      "parameters": {
+        "content": "## Invoice Dispute Agent\n\nMatches invoices to PO and receipt evidence, classifies discrepancies, routes disputes to AP, and drafts vendor responses.",
+        "height": 250,
+        "width": 430,
+        "color": 4
+      }
+    },
+    {
+      "id": "sticky-finance",
+      "name": "Finance Notes",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [80, 330],
+      "parameters": {
+        "content": "## Finance controls\n\n. Evidence packet before decision.\n. Meaningful deltas require AP review.\n. Vendor emails are drafts.\n. Audit row links invoice, PO, receipt, and discrepancy.",
+        "height": 280,
+        "width": 430,
+        "color": 6
+      }
+    },
+    {
+      "id": "webhook",
+      "name": "Invoice Intake Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [280, 320],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "finance/invoice-dispute",
+        "responseMode": "responseNode",
+        "options": {}
+      }
+    },
+    {
+      "id": "normalize",
+      "name": "Normalize Invoice",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [520, 320],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const body = $json.body ?? $json;\nreturn [{ json: {\n  invoice_id: body.invoice_id ?? `invoice-${Date.now()}`,\n  vendor: body.vendor ?? 'unknown vendor',\n  vendor_email: body.vendor_email ?? null,\n  po_number: body.po_number ?? body.purchase_order ?? null,\n  amount: Number(body.amount ?? 0),\n  currency: body.currency ?? 'USD',\n  line_items: body.line_items ?? [],\n  due_date: body.due_date ?? null\n} }];"
+      }
+    },
+    {
+      "id": "po",
+      "name": "Fetch PO Record",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [760, 200],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ `https://finance.example.com/purchase-orders/${$json.po_number}` }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "receipts",
+      "name": "Fetch Receipt Evidence",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [760, 440],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ `https://finance.example.com/receipts?po=${$json.po_number}` }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "merge",
+      "name": "Merge Invoice Evidence",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [1000, 320],
+      "parameters": {
+        "mode": "combine",
+        "combinationMode": "mergeByPosition",
+        "options": {}
+      }
+    },
+    {
+      "id": "agent",
+      "name": "Invoice Dispute Agent",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [1240, 320],
+      "parameters": {
+        "resource": "chat",
+        "model": "gpt-4o",
+        "messages": {
+          "values": [
+            { "role": "system", "content": "You review invoice discrepancies against PO and receipt evidence. Return JSON only: {dispute_required, discrepancy_type, discrepancy_amount, evidence, recommendation, vendor_email_draft, confidence}. discrepancy_type can be none, price, quantity, tax, missing_receipt, duplicate, or other." },
+            { "role": "user", "content": "Invoice: {{ JSON.stringify($('Normalize Invoice').item.json) }}\nPO and receipt evidence: {{ JSON.stringify($json) }}" }
+          ]
+        },
+        "jsonOutput": true,
+        "options": { "temperature": 0.05 }
+      },
+      "credentials": { "openAiApi": { "id": "REPLACE_ME", "name": "OpenAI account" } }
+    },
+    {
+      "id": "shape",
+      "name": "Shape Dispute Packet",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1480, 320],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const result = $json.message?.content ?? $json;\nconst invoice = $('Normalize Invoice').item.json;\nconst discrepancyType = ['none', 'price', 'quantity', 'tax', 'missing_receipt', 'duplicate', 'other'].includes(result.discrepancy_type) ? result.discrepancy_type : 'other';\nreturn [{ json: { ...invoice, dispute: { ...result, discrepancy_type: discrepancyType, discrepancy_amount: Number(result.discrepancy_amount ?? 0), confidence: Number(result.confidence ?? 0), evidence: Array.isArray(result.evidence) ? result.evidence : [] } } }];"
+      }
+    },
+    {
+      "id": "gate",
+      "name": "Needs AP Review?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1720, 320],
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            { "leftValue": "={{ $json.dispute.dispute_required === true || Math.abs($json.dispute.discrepancy_amount) > 250 || $json.dispute.confidence < 0.86 }}", "rightValue": true, "operator": { "type": "boolean", "operation": "equal" } }
+          ],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "approval",
+      "name": "Send AP Review",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.3,
+      "position": [1960, 220],
+      "parameters": {
+        "resource": "message",
+        "operation": "post",
+        "channel": "<<AP_REVIEW_CHANNEL_ID>>",
+        "text": "Invoice review needed: {{ $json.invoice_id }} / {{ $json.vendor }}. Type: {{ $json.dispute.discrepancy_type }}. Amount delta: {{ $json.dispute.discrepancy_amount }}. Evidence: {{ JSON.stringify($json.dispute.evidence) }}"
+      },
+      "credentials": { "slackApi": { "id": "REPLACE_ME", "name": "Slack Bot" } }
+    },
+    {
+      "id": "payment",
+      "name": "Queue Clean Payment",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3,
+      "position": [1960, 440],
+      "parameters": {
+        "assignments": { "assignments": [
+          { "id": "p1", "name": "status", "value": "payment_queue_ready", "type": "string" },
+          { "id": "p2", "name": "reason", "value": "={{ $json.dispute.recommendation }}", "type": "string" }
+        ] },
+        "options": {}
+      }
+    },
+    {
+      "id": "draft",
+      "name": "Create Vendor Email Draft",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [2200, 220],
+      "parameters": {
+        "resource": "draft",
+        "operation": "create",
+        "subject": "={{ `Invoice ${$json.invoice_id} review` }}",
+        "message": "={{ $json.dispute.vendor_email_draft }}",
+        "toList": "={{ $json.vendor_email ?? 'vendor@example.com' }}"
+      },
+      "credentials": { "gmailOAuth2": { "id": "REPLACE_ME", "name": "Gmail account" } }
+    },
+    {
+      "id": "audit",
+      "name": "Write Invoice Audit",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [2440, 320],
+      "parameters": {
+        "operation": "append",
+        "documentId": { "__rl": true, "value": "<<INVOICE_AUDIT_SHEET_ID>>", "mode": "id" },
+        "sheetName": { "__rl": true, "value": "InvoiceDisputes", "mode": "name" },
+        "columns": { "mappingMode": "defineBelow", "value": { "ts": "={{ $now.toISO() }}", "invoice_id": "={{ $('Normalize Invoice').item.json.invoice_id }}", "vendor": "={{ $('Normalize Invoice').item.json.vendor }}", "type": "={{ $('Shape Dispute Packet').item.json.dispute.discrepancy_type }}", "status": "={{ $json.status ?? 'ap_review_requested' }}" } }
+      },
+      "credentials": { "googleSheetsOAuth2Api": { "id": "REPLACE_ME", "name": "Google Sheets" } }
+    },
+    {
+      "id": "respond",
+      "name": "Respond Invoice Summary",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [2680, 320],
+      "parameters": { "options": {}, "respondWith": "allIncomingItems" }
+    }
+  ],
+  "connections": {
+    "Invoice Intake Webhook": { "main": [[{ "node": "Normalize Invoice", "type": "main", "index": 0 }]] },
+    "Normalize Invoice": { "main": [[{ "node": "Fetch PO Record", "type": "main", "index": 0 }, { "node": "Fetch Receipt Evidence", "type": "main", "index": 0 }]] },
+    "Fetch PO Record": { "main": [[{ "node": "Merge Invoice Evidence", "type": "main", "index": 0 }]] },
+    "Fetch Receipt Evidence": { "main": [[{ "node": "Merge Invoice Evidence", "type": "main", "index": 1 }]] },
+    "Merge Invoice Evidence": { "main": [[{ "node": "Invoice Dispute Agent", "type": "main", "index": 0 }]] },
+    "Invoice Dispute Agent": { "main": [[{ "node": "Shape Dispute Packet", "type": "main", "index": 0 }]] },
+    "Shape Dispute Packet": { "main": [[{ "node": "Needs AP Review?", "type": "main", "index": 0 }]] },
+    "Needs AP Review?": { "main": [[{ "node": "Send AP Review", "type": "main", "index": 0 }], [{ "node": "Queue Clean Payment", "type": "main", "index": 0 }]] },
+    "Send AP Review": { "main": [[{ "node": "Create Vendor Email Draft", "type": "main", "index": 0 }]] },
+    "Create Vendor Email Draft": { "main": [[{ "node": "Write Invoice Audit", "type": "main", "index": 0 }]] },
+    "Queue Clean Payment": { "main": [[{ "node": "Write Invoice Audit", "type": "main", "index": 0 }]] },
+    "Write Invoice Audit": { "main": [[{ "node": "Respond Invoice Summary", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "pinData": {},
+  "versionId": "33-invoice-dispute-agent"
+}

@@ -47,6 +47,9 @@ Built by Kerry Dean Jr. as a portfolio-grade workflow library, not a sales bundl
 | 28 | Contract Clause Review Agent | Contract intake, clause extraction, policy comparison, legal routing, and audit. |
 | 29 | Knowledge Base Freshness Agent | Support-search gap analysis, stale article scoring, owner routing, and audit. |
 | 30 | Executive Briefing Agent | Metric ingestion, risk synthesis, leadership digest, email draft, and review gate. |
+| 31 | Renewal Risk Agent | Usage and support signal merge, renewal risk scoring, CSM tasks, and audit. |
+| 32 | Access Review Agent | Identity and entitlement review, risky-access scoring, manager routing, and audit. |
+| 33 | Invoice Dispute Agent | Invoice, PO, and receipt matching with dispute packets, AP review, and audit. |
 
 The generated machine-readable catalog lives at `catalog/workflows.json`.
 
