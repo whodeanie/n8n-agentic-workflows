@@ -1,0 +1,207 @@
+{
+  "name": "Pet Care Appointment Agent",
+  "nodes": [
+    {
+      "id": "sticky-overview",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [80, 60],
+      "parameters": {
+        "content": "## Pet Care Appointment Agent\n\nTurns pet profiles, care history, symptoms, and schedules into reminders, appointment prep, and vet-review routing.",
+        "height": 250,
+        "width": 430,
+        "color": 4
+      }
+    },
+    {
+      "id": "sticky-pet",
+      "name": "Pet Safety Notes",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [80, 330],
+      "parameters": {
+        "content": "## Pet care controls\n\n. No diagnosis.\n. Concerning symptoms route to vet review.\n. Routine reminders save to care log.\n. Medication and vaccine dates stay explicit.",
+        "height": 280,
+        "width": 430,
+        "color": 6
+      }
+    },
+    {
+      "id": "webhook",
+      "name": "Pet Care Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [280, 320],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "personal/pet-care",
+        "responseMode": "responseNode",
+        "options": {}
+      }
+    },
+    {
+      "id": "normalize",
+      "name": "Normalize Pet Check",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [520, 320],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const body = $json.body ?? $json;\nreturn [{ json: {\n  care_id: body.care_id ?? `pet-${Date.now()}`,\n  pet_id: body.pet_id ?? 'primary_pet',\n  concern: body.concern ?? '',\n  symptoms: body.symptoms ?? [],\n  travel_or_boarding: body.travel_or_boarding ?? false,\n  target_date: body.target_date ?? null,\n  owner_notes: body.owner_notes ?? ''\n} }];"
+      }
+    },
+    {
+      "id": "profile",
+      "name": "Fetch Pet Profile",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [760, 200],
+      "parameters": {
+        "operation": "read",
+        "documentId": { "__rl": true, "value": "<<PET_CARE_SHEET_ID>>", "mode": "id" },
+        "sheetName": { "__rl": true, "value": "Pets", "mode": "name" },
+        "options": {}
+      },
+      "credentials": { "googleSheetsOAuth2Api": { "id": "REPLACE_ME", "name": "Google Sheets" } }
+    },
+    {
+      "id": "history",
+      "name": "Fetch Care History",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [760, 440],
+      "parameters": {
+        "operation": "read",
+        "documentId": { "__rl": true, "value": "<<PET_CARE_SHEET_ID>>", "mode": "id" },
+        "sheetName": { "__rl": true, "value": "CareHistory", "mode": "name" },
+        "options": {}
+      },
+      "credentials": { "googleSheetsOAuth2Api": { "id": "REPLACE_ME", "name": "Google Sheets" } }
+    },
+    {
+      "id": "merge",
+      "name": "Merge Pet Context",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [1000, 320],
+      "parameters": {
+        "mode": "combine",
+        "combinationMode": "mergeByPosition",
+        "options": {}
+      }
+    },
+    {
+      "id": "agent",
+      "name": "Pet Care Agent",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [1240, 320],
+      "parameters": {
+        "resource": "chat",
+        "model": "gpt-4o",
+        "messages": {
+          "values": [
+            { "role": "system", "content": "You create pet care reminders and vet-prep notes. Return JSON only: {routine_reminders, appointment_prep, concerning_flags, vet_review_required, confidence, notes}. Do not diagnose." },
+            { "role": "user", "content": "Pet check: {{ JSON.stringify($('Normalize Pet Check').item.json) }}\nPet profile and history: {{ JSON.stringify($json) }}" }
+          ]
+        },
+        "jsonOutput": true,
+        "options": { "temperature": 0.1 }
+      },
+      "credentials": { "openAiApi": { "id": "REPLACE_ME", "name": "OpenAI account" } }
+    },
+    {
+      "id": "shape",
+      "name": "Validate Pet Plan",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1480, 320],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const plan = $json.message?.content ?? $json;\nconst check = $('Normalize Pet Check').item.json;\nreturn [{ json: { ...check, plan: { ...plan, routine_reminders: Array.isArray(plan.routine_reminders) ? plan.routine_reminders : [], appointment_prep: Array.isArray(plan.appointment_prep) ? plan.appointment_prep : [], concerning_flags: Array.isArray(plan.concerning_flags) ? plan.concerning_flags : [], vet_review_required: plan.vet_review_required === true, confidence: Number(plan.confidence ?? 0) } } }];"
+      }
+    },
+    {
+      "id": "gate",
+      "name": "Needs Vet Review?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1720, 320],
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            { "leftValue": "={{ $json.plan.vet_review_required || $json.plan.concerning_flags.length > 0 || $json.symptoms.length > 0 || $json.plan.confidence < 0.84 }}", "rightValue": true, "operator": { "type": "boolean", "operation": "equal" } }
+          ],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "review",
+      "name": "Send Vet Review",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.3,
+      "position": [1960, 220],
+      "parameters": {
+        "resource": "message",
+        "operation": "post",
+        "channel": "<<PET_REVIEW_CHANNEL_ID>>",
+        "text": "Pet care review needed for {{ $json.pet_id }}. Flags: {{ JSON.stringify($json.plan.concerning_flags) }}. Prep: {{ JSON.stringify($json.plan.appointment_prep) }}"
+      },
+      "credentials": { "slackApi": { "id": "REPLACE_ME", "name": "Slack Bot" } }
+    },
+    {
+      "id": "save",
+      "name": "Save Care Reminders",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [1960, 440],
+      "parameters": {
+        "operation": "append",
+        "documentId": { "__rl": true, "value": "<<PET_CARE_SHEET_ID>>", "mode": "id" },
+        "sheetName": { "__rl": true, "value": "Reminders", "mode": "name" },
+        "columns": { "mappingMode": "defineBelow", "value": { "ts": "={{ $now.toISO() }}", "pet_id": "={{ $json.pet_id }}", "reminders": "={{ JSON.stringify($json.plan.routine_reminders) }}", "notes": "={{ $json.plan.notes }}" } }
+      },
+      "credentials": { "googleSheetsOAuth2Api": { "id": "REPLACE_ME", "name": "Google Sheets" } }
+    },
+    {
+      "id": "audit",
+      "name": "Write Pet Care Audit",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [2200, 320],
+      "parameters": {
+        "operation": "append",
+        "documentId": { "__rl": true, "value": "<<PET_CARE_SHEET_ID>>", "mode": "id" },
+        "sheetName": { "__rl": true, "value": "CareAudit", "mode": "name" },
+        "columns": { "mappingMode": "defineBelow", "value": { "ts": "={{ $now.toISO() }}", "care_id": "={{ $('Normalize Pet Check').item.json.care_id }}", "confidence": "={{ $('Validate Pet Plan').item.json.plan.confidence }}", "flags": "={{ JSON.stringify($('Validate Pet Plan').item.json.plan.concerning_flags) }}" } }
+      },
+      "credentials": { "googleSheetsOAuth2Api": { "id": "REPLACE_ME", "name": "Google Sheets" } }
+    },
+    {
+      "id": "respond",
+      "name": "Respond Pet Care Plan",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [2440, 320],
+      "parameters": { "options": {}, "respondWith": "allIncomingItems" }
+    }
+  ],
+  "connections": {
+    "Pet Care Webhook": { "main": [[{ "node": "Normalize Pet Check", "type": "main", "index": 0 }]] },
+    "Normalize Pet Check": { "main": [[{ "node": "Fetch Pet Profile", "type": "main", "index": 0 }, { "node": "Fetch Care History", "type": "main", "index": 0 }]] },
+    "Fetch Pet Profile": { "main": [[{ "node": "Merge Pet Context", "type": "main", "index": 0 }]] },
+    "Fetch Care History": { "main": [[{ "node": "Merge Pet Context", "type": "main", "index": 1 }]] },
+    "Merge Pet Context": { "main": [[{ "node": "Pet Care Agent", "type": "main", "index": 0 }]] },
+    "Pet Care Agent": { "main": [[{ "node": "Validate Pet Plan", "type": "main", "index": 0 }]] },
+    "Validate Pet Plan": { "main": [[{ "node": "Needs Vet Review?", "type": "main", "index": 0 }]] },
+    "Needs Vet Review?": { "main": [[{ "node": "Send Vet Review", "type": "main", "index": 0 }], [{ "node": "Save Care Reminders", "type": "main", "index": 0 }]] },
+    "Send Vet Review": { "main": [[{ "node": "Write Pet Care Audit", "type": "main", "index": 0 }]] },
+    "Save Care Reminders": { "main": [[{ "node": "Write Pet Care Audit", "type": "main", "index": 0 }]] },
+    "Write Pet Care Audit": { "main": [[{ "node": "Respond Pet Care Plan", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "pinData": {},
+  "versionId": "49-pet-care-appointment-agent"
+}

@@ -62,6 +62,10 @@ Built by Kerry Dean Jr. as a portfolio-grade workflow library, not a sales bundl
 | 43 | Reading Watchlist Curator Agent | Saved links, preference matching, duplicate detection, queue ranking, archive suggestions, and audit. |
 | 44 | Outfit Weather Planner Agent | Weather, calendar, wardrobe inventory, dress-code fit, outfit backup, and audit. |
 | 45 | Personal Digest Priority Agent | Inbox, calendar, tasks, priority actions, morning digest, urgent alerts, and audit. |
+| 46 | Car Maintenance Roadtrip Agent | Vehicle profile, service history, route weather, safety checklist, mechanic review, and audit. |
+| 47 | Garden Plant Care Agent | Plant inventory, local weather, care history, watering adjustments, risk review, and audit. |
+| 48 | Local Events Volunteer Agent | Interest matching, local events, volunteer opportunities, weekend shortlist, and audit. |
+| 49 | Pet Care Appointment Agent | Pet profile, care history, symptom intake, reminders, vet review, and audit. |
 
 The generated machine-readable catalog lives at `catalog/workflows.json`.
 

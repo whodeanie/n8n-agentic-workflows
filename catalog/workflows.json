@@ -904,5 +904,86 @@
       "slack"
     ],
     "workflowPath": "45-personal-digest-priority-agent/workflow.json"
+  },
+  {
+    "slug": "46-car-maintenance-roadtrip-agent",
+    "name": "Car Maintenance Roadtrip Agent",
+    "nodeCount": 16,
+    "stickyNoteCount": 2,
+    "triggerTypes": [
+      "webhook"
+    ],
+    "integrationTypes": [
+      "code",
+      "googleSheets",
+      "httpRequest",
+      "if",
+      "merge",
+      "openAi",
+      "respondToWebhook",
+      "slack",
+      "webhook"
+    ],
+    "workflowPath": "46-car-maintenance-roadtrip-agent/workflow.json"
+  },
+  {
+    "slug": "47-garden-plant-care-agent",
+    "name": "Garden Plant Care Agent",
+    "nodeCount": 14,
+    "stickyNoteCount": 2,
+    "triggerTypes": [
+      "scheduleTrigger"
+    ],
+    "integrationTypes": [
+      "code",
+      "googleSheets",
+      "httpRequest",
+      "if",
+      "merge",
+      "openAi",
+      "scheduleTrigger",
+      "slack"
+    ],
+    "workflowPath": "47-garden-plant-care-agent/workflow.json"
+  },
+  {
+    "slug": "48-local-events-volunteer-agent",
+    "name": "Local Events Volunteer Agent",
+    "nodeCount": 14,
+    "stickyNoteCount": 2,
+    "triggerTypes": [
+      "scheduleTrigger"
+    ],
+    "integrationTypes": [
+      "code",
+      "googleSheets",
+      "httpRequest",
+      "if",
+      "merge",
+      "openAi",
+      "scheduleTrigger",
+      "slack"
+    ],
+    "workflowPath": "48-local-events-volunteer-agent/workflow.json"
+  },
+  {
+    "slug": "49-pet-care-appointment-agent",
+    "name": "Pet Care Appointment Agent",
+    "nodeCount": 14,
+    "stickyNoteCount": 2,
+    "triggerTypes": [
+      "webhook"
+    ],
+    "integrationTypes": [
+      "code",
+      "googleSheets",
+      "if",
+      "merge",
+      "openAi",
+      "respondToWebhook",
+      "slack",
+      "webhook"
+    ],
+    "workflowPath": "49-pet-care-appointment-agent/workflow.json"
   }
 ]

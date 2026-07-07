@@ -1,0 +1,207 @@
+{
+  "name": "Local Events Volunteer Agent",
+  "nodes": [
+    {
+      "id": "sticky-overview",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [80, 60],
+      "parameters": {
+        "content": "## Local Events Volunteer Agent\n\nFinds local events and volunteer opportunities, scores fit, and creates a short weekend shortlist.",
+        "height": 250,
+        "width": 430,
+        "color": 4
+      }
+    },
+    {
+      "id": "sticky-fit",
+      "name": "Fit Notes",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [80, 330],
+      "parameters": {
+        "content": "## Fit controls\n\n. Score schedule, budget, distance, and interest match.\n. Accessibility and family fit are visible.\n. Keep shortlist small.\n. Audit stores why each item was included.",
+        "height": 280,
+        "width": 430,
+        "color": 6
+      }
+    },
+    {
+      "id": "schedule",
+      "name": "Opportunity Schedule",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [280, 320],
+      "parameters": {
+        "rule": { "interval": [{ "field": "weeks", "weeksInterval": 1 }] }
+      }
+    },
+    {
+      "id": "interests",
+      "name": "Fetch Interests",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [520, 180],
+      "parameters": {
+        "operation": "read",
+        "documentId": { "__rl": true, "value": "<<LOCAL_LIFE_SHEET_ID>>", "mode": "id" },
+        "sheetName": { "__rl": true, "value": "Interests", "mode": "name" },
+        "options": {}
+      },
+      "credentials": { "googleSheetsOAuth2Api": { "id": "REPLACE_ME", "name": "Google Sheets" } }
+    },
+    {
+      "id": "events",
+      "name": "Fetch Local Events",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [520, 320],
+      "parameters": {
+        "method": "GET",
+        "url": "https://events.example.com/local?range=weekend",
+        "options": {}
+      }
+    },
+    {
+      "id": "volunteer",
+      "name": "Fetch Volunteer Opportunities",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [520, 460],
+      "parameters": {
+        "method": "GET",
+        "url": "https://volunteer.example.com/opportunities?range=weekend",
+        "options": {}
+      }
+    },
+    {
+      "id": "merge-events",
+      "name": "Merge Interests And Events",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [760, 250],
+      "parameters": {
+        "mode": "combine",
+        "combinationMode": "mergeByPosition",
+        "options": {}
+      }
+    },
+    {
+      "id": "merge-all",
+      "name": "Merge Opportunity Context",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [1000, 320],
+      "parameters": {
+        "mode": "combine",
+        "combinationMode": "mergeByPosition",
+        "options": {}
+      }
+    },
+    {
+      "id": "agent",
+      "name": "Opportunity Fit Agent",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [1240, 320],
+      "parameters": {
+        "resource": "chat",
+        "model": "gpt-4o",
+        "messages": {
+          "values": [
+            { "role": "system", "content": "You rank local events and volunteer opportunities. Return JSON only: {shortlist, backup_options, schedule_conflicts, budget_notes, accessibility_notes, confidence, rationale}." },
+            { "role": "user", "content": "Interests, local events, and volunteer opportunities: {{ JSON.stringify($json) }}" }
+          ]
+        },
+        "jsonOutput": true,
+        "options": { "temperature": 0.22 }
+      },
+      "credentials": { "openAiApi": { "id": "REPLACE_ME", "name": "OpenAI account" } }
+    },
+    {
+      "id": "shape",
+      "name": "Validate Opportunity Shortlist",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1480, 320],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const result = $json.message?.content ?? $json;\nreturn [{ json: { opportunities: { ...result, shortlist: Array.isArray(result.shortlist) ? result.shortlist.slice(0, 6) : [], backup_options: Array.isArray(result.backup_options) ? result.backup_options : [], schedule_conflicts: Array.isArray(result.schedule_conflicts) ? result.schedule_conflicts : [], confidence: Number(result.confidence ?? 0) } } }];"
+      }
+    },
+    {
+      "id": "gate",
+      "name": "Enough Opportunity Fit?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1720, 320],
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            { "leftValue": "={{ $json.opportunities.confidence >= 0.82 && $json.opportunities.shortlist.length > 0 }}", "rightValue": true, "operator": { "type": "boolean", "operation": "equal" } }
+          ],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "post",
+      "name": "Post Weekend Opportunities",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.3,
+      "position": [1960, 220],
+      "parameters": {
+        "resource": "message",
+        "operation": "post",
+        "channel": "<<LOCAL_OPPORTUNITY_CHANNEL_ID>>",
+        "text": "Weekend opportunities: {{ JSON.stringify($json.opportunities.shortlist) }}\nWhy: {{ $json.opportunities.rationale }}"
+      },
+      "credentials": { "slackApi": { "id": "REPLACE_ME", "name": "Slack Bot" } }
+    },
+    {
+      "id": "review",
+      "name": "Send Opportunity Review",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.3,
+      "position": [1960, 440],
+      "parameters": {
+        "resource": "message",
+        "operation": "post",
+        "channel": "<<LOCAL_OPPORTUNITY_CHANNEL_ID>>",
+        "text": "Opportunity review needed. Conflicts: {{ JSON.stringify($json.opportunities.schedule_conflicts) }}. Backup options: {{ JSON.stringify($json.opportunities.backup_options) }}"
+      },
+      "credentials": { "slackApi": { "id": "REPLACE_ME", "name": "Slack Bot" } }
+    },
+    {
+      "id": "audit",
+      "name": "Write Opportunity Audit",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [2200, 320],
+      "parameters": {
+        "operation": "append",
+        "documentId": { "__rl": true, "value": "<<LOCAL_LIFE_SHEET_ID>>", "mode": "id" },
+        "sheetName": { "__rl": true, "value": "OpportunityAudit", "mode": "name" },
+        "columns": { "mappingMode": "defineBelow", "value": { "ts": "={{ $now.toISO() }}", "shortlist": "={{ JSON.stringify($('Validate Opportunity Shortlist').item.json.opportunities.shortlist) }}", "confidence": "={{ $('Validate Opportunity Shortlist').item.json.opportunities.confidence }}" } }
+      },
+      "credentials": { "googleSheetsOAuth2Api": { "id": "REPLACE_ME", "name": "Google Sheets" } }
+    }
+  ],
+  "connections": {
+    "Opportunity Schedule": { "main": [[{ "node": "Fetch Interests", "type": "main", "index": 0 }, { "node": "Fetch Local Events", "type": "main", "index": 0 }, { "node": "Fetch Volunteer Opportunities", "type": "main", "index": 0 }]] },
+    "Fetch Interests": { "main": [[{ "node": "Merge Interests And Events", "type": "main", "index": 0 }]] },
+    "Fetch Local Events": { "main": [[{ "node": "Merge Interests And Events", "type": "main", "index": 1 }]] },
+    "Merge Interests And Events": { "main": [[{ "node": "Merge Opportunity Context", "type": "main", "index": 0 }]] },
+    "Fetch Volunteer Opportunities": { "main": [[{ "node": "Merge Opportunity Context", "type": "main", "index": 1 }]] },
+    "Merge Opportunity Context": { "main": [[{ "node": "Opportunity Fit Agent", "type": "main", "index": 0 }]] },
+    "Opportunity Fit Agent": { "main": [[{ "node": "Validate Opportunity Shortlist", "type": "main", "index": 0 }]] },
+    "Validate Opportunity Shortlist": { "main": [[{ "node": "Enough Opportunity Fit?", "type": "main", "index": 0 }]] },
+    "Enough Opportunity Fit?": { "main": [[{ "node": "Post Weekend Opportunities", "type": "main", "index": 0 }], [{ "node": "Send Opportunity Review", "type": "main", "index": 0 }]] },
+    "Post Weekend Opportunities": { "main": [[{ "node": "Write Opportunity Audit", "type": "main", "index": 0 }]] },
+    "Send Opportunity Review": { "main": [[{ "node": "Write Opportunity Audit", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "pinData": {},
+  "versionId": "48-local-events-volunteer-agent"
+}

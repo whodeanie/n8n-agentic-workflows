@@ -1,0 +1,233 @@
+{
+  "name": "Car Maintenance Roadtrip Agent",
+  "nodes": [
+    {
+      "id": "sticky-overview",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [80, 60],
+      "parameters": {
+        "content": "## Car Maintenance Roadtrip Agent\n\nBuilds a vehicle check plan from trip distance, weather, vehicle profile, and service history.",
+        "height": 250,
+        "width": 430,
+        "color": 4
+      }
+    },
+    {
+      "id": "sticky-safety",
+      "name": "Safety Notes",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [80, 330],
+      "parameters": {
+        "content": "## Safety controls\n\n. Brake, tire, battery, and warning-light issues route to review.\n. The output is a checklist, not a diagnosis.\n. Weather and trip length affect urgency.\n. Every recommendation is audited.",
+        "height": 300,
+        "width": 430,
+        "color": 6
+      }
+    },
+    {
+      "id": "webhook",
+      "name": "Roadtrip Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [280, 320],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "personal/car-roadtrip",
+        "responseMode": "responseNode",
+        "options": {}
+      }
+    },
+    {
+      "id": "normalize",
+      "name": "Normalize Trip",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [520, 320],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const body = $json.body ?? $json;\nreturn [{ json: {\n  trip_id: body.trip_id ?? `trip-${Date.now()}`,\n  vehicle_id: body.vehicle_id ?? 'primary',\n  destination: body.destination ?? 'unknown',\n  distance_miles: Number(body.distance_miles ?? 0),\n  departure_date: body.departure_date ?? null,\n  concerns: body.concerns ?? [],\n  dashboard_lights: body.dashboard_lights ?? []\n} }];"
+      }
+    },
+    {
+      "id": "vehicle",
+      "name": "Fetch Vehicle Profile",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [760, 160],
+      "parameters": {
+        "operation": "read",
+        "documentId": { "__rl": true, "value": "<<CAR_SHEET_ID>>", "mode": "id" },
+        "sheetName": { "__rl": true, "value": "Vehicles", "mode": "name" },
+        "options": {}
+      },
+      "credentials": { "googleSheetsOAuth2Api": { "id": "REPLACE_ME", "name": "Google Sheets" } }
+    },
+    {
+      "id": "service",
+      "name": "Fetch Service History",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [760, 320],
+      "parameters": {
+        "operation": "read",
+        "documentId": { "__rl": true, "value": "<<CAR_SHEET_ID>>", "mode": "id" },
+        "sheetName": { "__rl": true, "value": "ServiceHistory", "mode": "name" },
+        "options": {}
+      },
+      "credentials": { "googleSheetsOAuth2Api": { "id": "REPLACE_ME", "name": "Google Sheets" } }
+    },
+    {
+      "id": "weather",
+      "name": "Fetch Route Weather",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [760, 480],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ `https://weather.example.com/route?destination=${encodeURIComponent($json.destination)}&date=${$json.departure_date}` }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "merge-profile",
+      "name": "Merge Vehicle And Service",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [1000, 240],
+      "parameters": {
+        "mode": "combine",
+        "combinationMode": "mergeByPosition",
+        "options": {}
+      }
+    },
+    {
+      "id": "merge-all",
+      "name": "Merge Roadtrip Context",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [1240, 320],
+      "parameters": {
+        "mode": "combine",
+        "combinationMode": "mergeByPosition",
+        "options": {}
+      }
+    },
+    {
+      "id": "agent",
+      "name": "Car Maintenance Agent",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [1480, 320],
+      "parameters": {
+        "resource": "chat",
+        "model": "gpt-4o",
+        "messages": {
+          "values": [
+            { "role": "system", "content": "You create car maintenance checklists. Return JSON only: {immediate_checks, before_trip_tasks, nice_to_have_tasks, safety_flags, estimated_cost, review_required, confidence, rationale}. Do not diagnose repairs." },
+            { "role": "user", "content": "Trip: {{ JSON.stringify($('Normalize Trip').item.json) }}\nVehicle, service, and route context: {{ JSON.stringify($json) }}" }
+          ]
+        },
+        "jsonOutput": true,
+        "options": { "temperature": 0.12 }
+      },
+      "credentials": { "openAiApi": { "id": "REPLACE_ME", "name": "OpenAI account" } }
+    },
+    {
+      "id": "shape",
+      "name": "Validate Car Checklist",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1720, 320],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const checklist = $json.message?.content ?? $json;\nconst trip = $('Normalize Trip').item.json;\nreturn [{ json: { ...trip, checklist: { ...checklist, immediate_checks: Array.isArray(checklist.immediate_checks) ? checklist.immediate_checks : [], safety_flags: Array.isArray(checklist.safety_flags) ? checklist.safety_flags : [], estimated_cost: Number(checklist.estimated_cost ?? 0), confidence: Number(checklist.confidence ?? 0), review_required: checklist.review_required === true } } }];"
+      }
+    },
+    {
+      "id": "gate",
+      "name": "Needs Mechanic Review?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1960, 320],
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            { "leftValue": "={{ $json.checklist.review_required || $json.checklist.safety_flags.length > 0 || $json.dashboard_lights.length > 0 || $json.checklist.confidence < 0.82 }}", "rightValue": true, "operator": { "type": "boolean", "operation": "equal" } }
+          ],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "review",
+      "name": "Send Mechanic Review",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.3,
+      "position": [2200, 220],
+      "parameters": {
+        "resource": "message",
+        "operation": "post",
+        "channel": "<<CAR_REVIEW_CHANNEL_ID>>",
+        "text": "Car review needed before trip to {{ $json.destination }}. Safety flags: {{ JSON.stringify($json.checklist.safety_flags) }}. Dashboard: {{ JSON.stringify($json.dashboard_lights) }}"
+      },
+      "credentials": { "slackApi": { "id": "REPLACE_ME", "name": "Slack Bot" } }
+    },
+    {
+      "id": "save",
+      "name": "Save Roadtrip Checklist",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [2200, 440],
+      "parameters": {
+        "operation": "append",
+        "documentId": { "__rl": true, "value": "<<CAR_SHEET_ID>>", "mode": "id" },
+        "sheetName": { "__rl": true, "value": "RoadtripChecks", "mode": "name" },
+        "columns": { "mappingMode": "defineBelow", "value": { "ts": "={{ $now.toISO() }}", "trip_id": "={{ $json.trip_id }}", "destination": "={{ $json.destination }}", "checklist": "={{ JSON.stringify($json.checklist) }}" } }
+      },
+      "credentials": { "googleSheetsOAuth2Api": { "id": "REPLACE_ME", "name": "Google Sheets" } }
+    },
+    {
+      "id": "audit",
+      "name": "Write Car Audit",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [2440, 320],
+      "parameters": {
+        "operation": "append",
+        "documentId": { "__rl": true, "value": "<<CAR_SHEET_ID>>", "mode": "id" },
+        "sheetName": { "__rl": true, "value": "CarAudit", "mode": "name" },
+        "columns": { "mappingMode": "defineBelow", "value": { "ts": "={{ $now.toISO() }}", "trip_id": "={{ $('Normalize Trip').item.json.trip_id }}", "confidence": "={{ $('Validate Car Checklist').item.json.checklist.confidence }}", "safety_flags": "={{ JSON.stringify($('Validate Car Checklist').item.json.checklist.safety_flags) }}" } }
+      },
+      "credentials": { "googleSheetsOAuth2Api": { "id": "REPLACE_ME", "name": "Google Sheets" } }
+    },
+    {
+      "id": "respond",
+      "name": "Respond Roadtrip Checklist",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [2680, 320],
+      "parameters": { "options": {}, "respondWith": "allIncomingItems" }
+    }
+  ],
+  "connections": {
+    "Roadtrip Webhook": { "main": [[{ "node": "Normalize Trip", "type": "main", "index": 0 }]] },
+    "Normalize Trip": { "main": [[{ "node": "Fetch Vehicle Profile", "type": "main", "index": 0 }, { "node": "Fetch Service History", "type": "main", "index": 0 }, { "node": "Fetch Route Weather", "type": "main", "index": 0 }]] },
+    "Fetch Vehicle Profile": { "main": [[{ "node": "Merge Vehicle And Service", "type": "main", "index": 0 }]] },
+    "Fetch Service History": { "main": [[{ "node": "Merge Vehicle And Service", "type": "main", "index": 1 }]] },
+    "Merge Vehicle And Service": { "main": [[{ "node": "Merge Roadtrip Context", "type": "main", "index": 0 }]] },
+    "Fetch Route Weather": { "main": [[{ "node": "Merge Roadtrip Context", "type": "main", "index": 1 }]] },
+    "Merge Roadtrip Context": { "main": [[{ "node": "Car Maintenance Agent", "type": "main", "index": 0 }]] },
+    "Car Maintenance Agent": { "main": [[{ "node": "Validate Car Checklist", "type": "main", "index": 0 }]] },
+    "Validate Car Checklist": { "main": [[{ "node": "Needs Mechanic Review?", "type": "main", "index": 0 }]] },
+    "Needs Mechanic Review?": { "main": [[{ "node": "Send Mechanic Review", "type": "main", "index": 0 }], [{ "node": "Save Roadtrip Checklist", "type": "main", "index": 0 }]] },
+    "Send Mechanic Review": { "main": [[{ "node": "Write Car Audit", "type": "main", "index": 0 }]] },
+    "Save Roadtrip Checklist": { "main": [[{ "node": "Write Car Audit", "type": "main", "index": 0 }]] },
+    "Write Car Audit": { "main": [[{ "node": "Respond Roadtrip Checklist", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "pinData": {},
+  "versionId": "46-car-maintenance-roadtrip-agent"
+}

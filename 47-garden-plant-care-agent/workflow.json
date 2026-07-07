@@ -1,0 +1,209 @@
+{
+  "name": "Garden Plant Care Agent",
+  "nodes": [
+    {
+      "id": "sticky-overview",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [80, 60],
+      "parameters": {
+        "content": "## Garden Plant Care Agent\n\nTurns plant inventory, weather, and care history into watering, feeding, pruning, and risk review tasks.",
+        "height": 250,
+        "width": 430,
+        "color": 4
+      }
+    },
+    {
+      "id": "sticky-care",
+      "name": "Plant Care Notes",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [80, 330],
+      "parameters": {
+        "content": "## Care controls\n\n. Weather changes watering.\n. Pest or disease signs route to review.\n. Routine tasks go to the care log.\n. Recommendations cite plant needs and history.",
+        "height": 280,
+        "width": 430,
+        "color": 6
+      }
+    },
+    {
+      "id": "schedule",
+      "name": "Plant Care Schedule",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [280, 320],
+      "parameters": {
+        "rule": { "interval": [{ "field": "days", "daysInterval": 2 }] }
+      }
+    },
+    {
+      "id": "plants",
+      "name": "Fetch Plant Inventory",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [520, 180],
+      "parameters": {
+        "operation": "read",
+        "documentId": { "__rl": true, "value": "<<PLANT_SHEET_ID>>", "mode": "id" },
+        "sheetName": { "__rl": true, "value": "Plants", "mode": "name" },
+        "options": {}
+      },
+      "credentials": { "googleSheetsOAuth2Api": { "id": "REPLACE_ME", "name": "Google Sheets" } }
+    },
+    {
+      "id": "weather",
+      "name": "Fetch Local Weather",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [520, 320],
+      "parameters": {
+        "method": "GET",
+        "url": "https://weather.example.com/garden?location=home",
+        "options": {}
+      }
+    },
+    {
+      "id": "history",
+      "name": "Fetch Care History",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [520, 460],
+      "parameters": {
+        "operation": "read",
+        "documentId": { "__rl": true, "value": "<<PLANT_SHEET_ID>>", "mode": "id" },
+        "sheetName": { "__rl": true, "value": "CareHistory", "mode": "name" },
+        "options": {}
+      },
+      "credentials": { "googleSheetsOAuth2Api": { "id": "REPLACE_ME", "name": "Google Sheets" } }
+    },
+    {
+      "id": "merge-weather",
+      "name": "Merge Plants And Weather",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [760, 250],
+      "parameters": {
+        "mode": "combine",
+        "combinationMode": "mergeByPosition",
+        "options": {}
+      }
+    },
+    {
+      "id": "merge-all",
+      "name": "Merge Plant Context",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [1000, 320],
+      "parameters": {
+        "mode": "combine",
+        "combinationMode": "mergeByPosition",
+        "options": {}
+      }
+    },
+    {
+      "id": "agent",
+      "name": "Plant Care Agent",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [1240, 320],
+      "parameters": {
+        "resource": "chat",
+        "model": "gpt-4o",
+        "messages": {
+          "values": [
+            { "role": "system", "content": "You create plant care tasks. Return JSON only: {care_tasks, watering_adjustments, pest_or_disease_flags, supplies_needed, review_required, confidence, summary}." },
+            { "role": "user", "content": "Plant inventory, weather, and care history: {{ JSON.stringify($json) }}" }
+          ]
+        },
+        "jsonOutput": true,
+        "options": { "temperature": 0.16 }
+      },
+      "credentials": { "openAiApi": { "id": "REPLACE_ME", "name": "OpenAI account" } }
+    },
+    {
+      "id": "shape",
+      "name": "Validate Care Plan",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1480, 320],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const plan = $json.message?.content ?? $json;\nreturn [{ json: { plan: { ...plan, care_tasks: Array.isArray(plan.care_tasks) ? plan.care_tasks : [], pest_or_disease_flags: Array.isArray(plan.pest_or_disease_flags) ? plan.pest_or_disease_flags : [], supplies_needed: Array.isArray(plan.supplies_needed) ? plan.supplies_needed : [], review_required: plan.review_required === true, confidence: Number(plan.confidence ?? 0) } } }];"
+      }
+    },
+    {
+      "id": "gate",
+      "name": "Needs Plant Review?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1720, 320],
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            { "leftValue": "={{ $json.plan.review_required || $json.plan.pest_or_disease_flags.length > 0 || $json.plan.confidence < 0.82 }}", "rightValue": true, "operator": { "type": "boolean", "operation": "equal" } }
+          ],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "review",
+      "name": "Send Plant Review",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.3,
+      "position": [1960, 220],
+      "parameters": {
+        "resource": "message",
+        "operation": "post",
+        "channel": "<<PLANT_REVIEW_CHANNEL_ID>>",
+        "text": "Plant review needed. Flags: {{ JSON.stringify($json.plan.pest_or_disease_flags) }}. Supplies: {{ JSON.stringify($json.plan.supplies_needed) }}"
+      },
+      "credentials": { "slackApi": { "id": "REPLACE_ME", "name": "Slack Bot" } }
+    },
+    {
+      "id": "save",
+      "name": "Save Care Tasks",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [1960, 440],
+      "parameters": {
+        "operation": "append",
+        "documentId": { "__rl": true, "value": "<<PLANT_SHEET_ID>>", "mode": "id" },
+        "sheetName": { "__rl": true, "value": "CareTasks", "mode": "name" },
+        "columns": { "mappingMode": "defineBelow", "value": { "ts": "={{ $now.toISO() }}", "tasks": "={{ JSON.stringify($json.plan.care_tasks) }}", "watering": "={{ JSON.stringify($json.plan.watering_adjustments) }}" } }
+      },
+      "credentials": { "googleSheetsOAuth2Api": { "id": "REPLACE_ME", "name": "Google Sheets" } }
+    },
+    {
+      "id": "audit",
+      "name": "Write Plant Audit",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [2200, 320],
+      "parameters": {
+        "operation": "append",
+        "documentId": { "__rl": true, "value": "<<PLANT_SHEET_ID>>", "mode": "id" },
+        "sheetName": { "__rl": true, "value": "CareAudit", "mode": "name" },
+        "columns": { "mappingMode": "defineBelow", "value": { "ts": "={{ $now.toISO() }}", "confidence": "={{ $('Validate Care Plan').item.json.plan.confidence }}", "flags": "={{ JSON.stringify($('Validate Care Plan').item.json.plan.pest_or_disease_flags) }}" } }
+      },
+      "credentials": { "googleSheetsOAuth2Api": { "id": "REPLACE_ME", "name": "Google Sheets" } }
+    }
+  ],
+  "connections": {
+    "Plant Care Schedule": { "main": [[{ "node": "Fetch Plant Inventory", "type": "main", "index": 0 }, { "node": "Fetch Local Weather", "type": "main", "index": 0 }, { "node": "Fetch Care History", "type": "main", "index": 0 }]] },
+    "Fetch Plant Inventory": { "main": [[{ "node": "Merge Plants And Weather", "type": "main", "index": 0 }]] },
+    "Fetch Local Weather": { "main": [[{ "node": "Merge Plants And Weather", "type": "main", "index": 1 }]] },
+    "Merge Plants And Weather": { "main": [[{ "node": "Merge Plant Context", "type": "main", "index": 0 }]] },
+    "Fetch Care History": { "main": [[{ "node": "Merge Plant Context", "type": "main", "index": 1 }]] },
+    "Merge Plant Context": { "main": [[{ "node": "Plant Care Agent", "type": "main", "index": 0 }]] },
+    "Plant Care Agent": { "main": [[{ "node": "Validate Care Plan", "type": "main", "index": 0 }]] },
+    "Validate Care Plan": { "main": [[{ "node": "Needs Plant Review?", "type": "main", "index": 0 }]] },
+    "Needs Plant Review?": { "main": [[{ "node": "Send Plant Review", "type": "main", "index": 0 }], [{ "node": "Save Care Tasks", "type": "main", "index": 0 }]] },
+    "Send Plant Review": { "main": [[{ "node": "Write Plant Audit", "type": "main", "index": 0 }]] },
+    "Save Care Tasks": { "main": [[{ "node": "Write Plant Audit", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "pinData": {},
+  "versionId": "47-garden-plant-care-agent"
+}
